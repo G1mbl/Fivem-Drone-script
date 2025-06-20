@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://code.jquery.com/jquery.min.js"></script>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
+    <link href="https://netdna.bootstrapcdn.com/font-awesome/4.0.3/css/font-awesome.min.css" rel="stylesheet" type="text/css" />
+    <link href="https://fonts.googleapis.com/css?family=Share+Tech+Mono&effect=outline" rel="stylesheet" type="text/css"> 
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>Drone Overlay</title>
+    <style>
+        body {
+            background-color: rgba(0, 0, 0, 0);
+            margin: 0px auto;
+            overflow: hidden;
+            font-family: 'Cast W01 Medium', monospace; /* Reverted Font */
+            font-size: 1.2vmin; /* Scalable font size */
+            color: #F8F8FF;
+        }
+
+        .overlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1000;
+            box-sizing: border-box;
+        }
+
+        /* This container restores the original position from the top */
+        .main-container {
+            position: absolute;
+            right: 0;
+            margin: 15vmin 1vmin 1vmin; /* Scalable margin */
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end; /* Aligned to end (right) */
+            gap: 1.4vmin; /* Scalable gap */
+        }
+
+        .info-container {
+            text-align: right; /* Aligned to right */
+            background-color: rgba(0,0,0,0.5);
+            padding: 0.5vmin 1vmin; /* Scalable padding */
+            border-radius: 1vmin;
+            display: flex;
+            align-items: center;
+            gap: 1.4vmin; /* Scalable gap */
+        }
+
+        .info-text {
+            text-align: right; /* Aligned to right */
+        }
+
+        #rec-line {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+
+        #bodycam .logo {
+            max-width: 6vmin; /* Scalable logo */
+            max-height: 6vmin; /* Scalable logo */
+            object-fit: contain;
+            opacity: 0.7;
+        }
+
+        .Blink {
+            animation: blinker 1.5s cubic-bezier(.5, 0, 1, 1) infinite alternate;
+        }
+
+        @keyframes blinker { from { opacity: 1; } to { opacity: 0; } }
+
+        /* ---------- HUD ELEMENTS (Signal/Battery) ---------- */
+        .hud-container {
+            display: flex;
+            gap: 1.4vmin; /* Spacing between signal and battery */
+            padding: 0.5vmin 1vmin; /* Scalable padding */
+            background-color: rgba(0,0,0,0.5);
+            border-radius: 1vmin;
+        }
+
+        .signal {
+            display: flex;
+            align-items: center;
+            gap: 0.6vmin; /* Scalable gap */
+        }
+        .signal i {
+            font-size: 1.7vmin; /* Scalable icon */
+        }
+        .signal .bars {
+            display: flex;
+            align-items: flex-end;
+            gap: 0.2vmin;
+        }
+        .signal .bars div {
+            width: 0.4vmin; /* Scalable width */
+            background-color: #555; /* Dimmed default */
+            transition: all 0.3s ease;
+        }
+        .signal .bars div.active {
+            background-color: #d9d9d9;
+        }
+
+        .battery {
+            display: flex;
+            align-items: center;
+            gap: 0.2vmin;
+        }
+        .battery-body {
+            position: relative;
+            width: 3.2vmin; /* Scalable width */
+            height: 1.3vmin; /* Scalable height */
+            border: 1px solid #aaa;
+            background-color: rgba(0,0,0,0.4);
+            border-radius: 0.3vmin;
+            overflow: hidden;
+        }
+        .battery-level {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            background-color: #4CAF50; /* Green for normal */
+            width: 100%;
+        }
+        .battery-cap {
+            width: 0.3vmin; /* Reverted width */
+            height: 0.8vmin; /* Reverted height */
+            background-color: #aaa;
+            border-radius: 0 0.2vmin 0.2vmin 0;
+        }
+
+        #batteryEmptyOverlay {
+            background-color: rgba(0, 0, 0, 1);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            z-index: 1003;
+        }
+        .battery-icon-empty {
+            display: flex;
+            align-items: center;
+        }
+        .battery-body-empty {
+            position: relative;
+            width: 20vmin; /* Much larger */
+            height: 8vmin;
+            border: 0.8vmin solid #aaa;
+            background-color: rgba(0,0,0,0.4);
+            border-radius: 2vmin;
+            overflow: hidden;
+        }
+        .battery-level-empty {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            background-color: #D93636; /* Red */
+            width: 20%;
+            animation: blinker 1s cubic-bezier(.5, 0, 1, 1) infinite alternate;
+        }
+        .battery-cap-empty {
+            width: 2vmin;
+            height: 5vmin;
+            background-color: #aaa;
+            border-radius: 0 0.5vmin 0.5vmin 0;
+        }
+
+        #connectionLostOverlay {
+            background-color: rgba(0, 0, 0, 1);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1003;
+        }
+        .connection-icon-lost {
+            position: relative;
+        }
+        .connection-icon-lost .bars-lost {
+            display: flex;
+            align-items: flex-end;
+            gap: 1vmin;
+        }
+        .connection-icon-lost .bars-lost div {
+            width: 2.5vmin;
+            background-color: #aaa;
+            border-radius: 0.5vmin;
+        }
+        .connection-icon-lost .bars-lost div:nth-child(1) { height: 2vmin; }
+        .connection-icon-lost .bars-lost div:nth-child(2) { height: 4vmin; }
+        .connection-icon-lost .bars-lost div:nth-child(3) { height: 6vmin; }
+        .connection-icon-lost .bars-lost div:nth-child(4) { height: 8vmin; }
+
+        .connection-icon-lost .fa-times {
+            position: absolute;
+            top: -0.5vmin;
+            left: -0.5vmin;
+            font-size: 6vmin;
+            color: #D93636;
+            text-shadow: 0 0 0.5vmin #000;
+            animation: blinker 1s cubic-bezier(.5, 0, 1, 1) infinite alternate;
+        }
+
+        #bodycam {
+            z-index: 1002;
+        }
+
+        .static-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            display: none;
+            z-index: 1004;
+        }
+
+        .static-overlay canvas {
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body>
+    <div id="staticOverlay" class="static-overlay">
+        <canvas id="staticCanvas"></canvas>
+    </div>
+    <div id="bodycam" class="overlay">
+        <div class="main-container">
+            <div class="info-container">
+                <div class="info-text">
+                    <div id="rec-line">
+                        <span>REC&nbsp;<i class="fa fa-circle text-danger Blink"></i></span>
+                        <span>Echofly™ Recon</span>
+                    </div>
+                    <span id="playerBodycamName">PLAYER_NAME</span><br />
+                    <span id="playerBodycamAgency">AGENCY_NAME</span><br />
+                    <div>
+                        <span id="bodycamMonth">MONTH</span>
+                        <span id="bodycamDay">00</span>
+                        <span id="bodycamYear">0000</span>&nbsp;
+                        <span id="bodycamHr">00</span>:<span id="bodycamMin">00</span>:<span id="bodycamSec">00</span>
+                        <span id="bodycamTz">TZ</span>
+                    </div>
+                </div>
+                <img id="bodycamLogo" class="logo" src="">
+            </div>
+
+            <div class="hud-container">
+                <div id="signalContainer" class="signal" style="display: none;">
+                    <div class="bars" id="signalBars">
+                        <div style="height: 0.4vmin;"></div>
+                        <div style="height: 0.8vmin;"></div>
+                        <div style="height: 1.2vmin;"></div>
+                        <div style="height: 1.6vmin;"></div>
+                    </div>
+                    <i class="fa fa-wifi"></i>
+                </div>
+                <div id="batteryContainer" class="battery" style="display: none;">
+                    <div class="battery-body">
+                        <div class="battery-level" id="batteryFill"></div>
+                    </div>
+                    <div class="battery-cap"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="batteryEmptyOverlay" class="overlay">
+        <div class="battery-icon-empty">
+            <div class="battery-body-empty">
+                <div class="battery-level-empty"></div>
+            </div>
+            <div class="battery-cap-empty"></div>
+        </div>
+    </div>
+
+    <div id="connectionLostOverlay" class="overlay">
+        <div class="connection-icon-lost">
+            <div class="bars-lost">
+                <div></div>
+                <div></div>
+                <div></div>
+                <div></div>
+            </div>
+            <i class="fa fa-times"></i>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('staticCanvas');
+        const ctx = canvas.getContext('2d');
+        let animationId;
+        let isStaticRunning = false;
+        let staticIntensity = 0.0;
+        let pixelSize = 4;
+
+        function updateCanvasSize() {
+            const baseWidth = window.innerWidth;
+            const baseHeight = window.innerHeight;
+            canvas.width = Math.floor(baseWidth / pixelSize);
+            canvas.height = Math.floor(baseHeight / pixelSize);
+        }
+
+        function generateStatic() {
+            const imageData = ctx.createImageData(canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            for (let i = 0; i < data.length; i += 4) {
+                if (Math.random() > staticIntensity) {
+                    data[i + 3] = 0; // Transparent pixel
+                } else {
+                    const value = Math.random() * 255;
+                    data[i] = value;
+                    data[i + 1] = value;
+                    data[i + 2] = value;
+                    data[i + 3] = 255; // Opaque static pixel
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        function animateStatic() {
+            if (!isStaticRunning) return;
+            generateStatic();
+            animationId = requestAnimationFrame(animateStatic);
+        }
+
+        function startStatic() {
+            if (isStaticRunning) return;
+            isStaticRunning = true;
+            updateCanvasSize();
+            animateStatic();
+        }
+
+        function stopStatic() {
+            isStaticRunning = false;
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        window.addEventListener('resize', updateCanvasSize);
+        updateCanvasSize();
+
+        let playerInfo = {
+            name: "Unknown",
+            rank: "Officer",
+            agency: "LSPD",
+            job: "unemployed",
+        };
+
+        const bodycamOverlay = document.getElementById('bodycam');
+        const playerBodycamNameEl = document.getElementById('playerBodycamName');
+        const playerBodycamAgencyEl = document.getElementById('playerBodycamAgency');
+        const bodycamLogoEl = document.getElementById('bodycamLogo');
+
+        const bodycamMonthEl = document.getElementById('bodycamMonth');
+        const bodycamDayEl = document.getElementById('bodycamDay');
+        const bodycamYearEl = document.getElementById('bodycamYear');
+        const bodycamHrEl = document.getElementById('bodycamHr');
+        const bodycamMinEl = document.getElementById('bodycamMin');
+        const bodycamSecEl = document.getElementById('bodycamSec');
+        const bodycamTzEl = document.getElementById('bodycamTz');
+
+        const signalContainer = document.getElementById('signalContainer');
+        const signalBars = document.getElementById('signalBars').children;
+        const batteryContainer = document.getElementById('batteryContainer');
+        const batteryFill = document.getElementById('batteryFill');
+
+        var d,h,m,s,animate;
+        const monthNames = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+
+        function initBodycamClock(){
+            d = new Date();
+            h = d.getHours();
+            m = d.getMinutes();
+            s = d.getSeconds();
+            try {
+                t = d.toLocaleTimeString('en', {timeZoneName:'short'}).split(' ')[2] || "LT";
+            } catch (e) {
+                t = "LT";
+            }
+            updateBodycamClockDisplay();
+            if (animate) clearTimeout(animate);
+            animate = setTimeout(runBodycamClock, 1000);
+        };
+
+        function runBodycamClock(){
+            s++;
+            if(s==60){ s=0; m++;
+                if(m==60){ m=0; h++;
+                    if(h==24){ h=0; d = new Date(); }
+                }
+            }
+            updateBodycamClockDisplay();
+            animate = setTimeout(runBodycamClock, 1000);
+        };
+        
+        function formatTwoDigits(val) {
+            return val < 10 ? '0' + val : val;
+        }
+
+        function updateBodycamClockDisplay(){
+            if(playerBodycamNameEl) playerBodycamNameEl.innerHTML = `${playerInfo.rank || ''} ${playerInfo.name || ''}`.trim();
+            if(playerBodycamAgencyEl) playerBodycamAgencyEl.innerHTML = playerInfo.agency || playerInfo.job || '';
+            
+            if(bodycamMonthEl) bodycamMonthEl.innerHTML = monthNames[d.getMonth()];
+            if(bodycamDayEl) bodycamDayEl.innerHTML = formatTwoDigits(d.getDate());
+            if(bodycamYearEl) bodycamYearEl.innerHTML = d.getFullYear();
+            if(bodycamHrEl) bodycamHrEl.innerHTML = formatTwoDigits(h);
+            if(bodycamMinEl) bodycamMinEl.innerHTML = formatTwoDigits(m);
+            if(bodycamSecEl) bodycamSecEl.innerHTML = formatTwoDigits(s);
+            if(bodycamTzEl) bodycamTzEl.innerHTML = t;
+        };
+
+        function updateSignal(strength) { // strength 0-100
+            const activeBars = Math.ceil(strength / 25);
+            for (let i = 0; i < signalBars.length; i++) {
+                signalBars[i].classList.toggle('active', i < activeBars);
+            }
+        }
+
+        function updateBattery(level) { // level 0-100
+            batteryFill.style.width = (level <= 1 ? 0 : level) + '%';
+
+            if (level <= 15) {
+                batteryFill.style.backgroundColor = '#D93636'; // Red
+            } else if (level <= 30) {
+                batteryFill.style.backgroundColor = '#F2C94C'; // Orange/Yellow
+            } else {
+                batteryFill.style.backgroundColor = '#4CAF50'; // Green
+            }
+        }
+
+        window.addEventListener('message', function(event) {
+            const item = event.data;
+
+            if (item.action === "showOverlay") {
+                playerInfo.agency = item.agencyName || playerInfo.agency;
+                if (item.logoUrl && item.logoUrl !== "") {
+                    bodycamLogoEl.src = item.logoUrl;
+                    bodycamLogoEl.style.display = 'block';
+                } else {
+                    bodycamLogoEl.style.display = 'none';
+                }
+                bodycamOverlay.style.display = 'flex';
+                initBodycamClock();
+            } else if (item.action === "hideOverlay") {
+                bodycamOverlay.style.display = 'none';
+                if(animate) clearTimeout(animate);
+                
+                const batteryEmptyEl = document.getElementById('batteryEmptyOverlay');
+                if (batteryEmptyEl) {
+                    batteryEmptyEl.style.display = 'none';
+                }
+                const connLostEl = document.getElementById('connectionLostOverlay');
+                if (connLostEl) {
+                    connLostEl.style.display = 'none';
+                }
+            } else if (item.action === "updatePlayerData") {
+                playerInfo.name = item.data.name || "Unknown";
+                playerInfo.rank = item.data.rank || "";
+                playerInfo.job = item.data.job || "Unemployed";
+                playerInfo.agency = item.data.job || "LSPD";
+                updateBodycamClockDisplay();
+            } else if (item.action === "updateHUD") {
+                let shouldShowHud = (item.showBattery || item.showSignal);
+                const hudContainer = document.querySelector('.hud-container');
+                if (hudContainer) hudContainer.style.display = shouldShowHud ? 'flex' : 'none';
+
+                if (item.showSignal) {
+                    signalContainer.style.display = 'flex';
+                    updateSignal(item.signal);
+                } else {
+                    signalContainer.style.display = 'none';
+                }
+
+                if (item.showBattery) {
+                    batteryContainer.style.display = 'flex';
+                    updateBattery(item.battery);
+                } else {
+                    batteryContainer.style.display = 'none';
+                }
+
+                const staticOverlay = document.getElementById('staticOverlay');
+                if (staticOverlay) {
+                    if (item.showNoise && item.noiseLevel > 0) {
+                        staticIntensity = item.noiseLevel;
+                        staticOverlay.style.display = 'block';
+                        startStatic();
+                    } else {
+                        staticOverlay.style.display = 'none';
+                        stopStatic();
+                    }
+                }
+            } else if (item.action === "showBatteryEmpty") {
+                stopStatic();
+                bodycamOverlay.style.display = 'none';
+                if(animate) clearTimeout(animate);
+
+                const batteryEmptyEl = document.getElementById('batteryEmptyOverlay');
+                if (batteryEmptyEl) {
+                    batteryEmptyEl.style.display = 'flex';
+                }
+            } else if (item.action === "showConnectionLost") {
+                stopStatic();
+                bodycamOverlay.style.display = 'none';
+                if(animate) clearTimeout(animate);
+
+                const connLostEl = document.getElementById('connectionLostOverlay');
+                if (connLostEl) {
+                    connLostEl.style.display = 'flex';
+                }
+            }
+        });
+    </script>
+</body>
+</html>
