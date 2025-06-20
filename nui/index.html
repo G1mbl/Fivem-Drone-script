@@ -377,51 +377,30 @@
         const batteryContainer = document.getElementById('batteryContainer');
         const batteryFill = document.getElementById('batteryFill');
 
-        var d,h,m,s,animate;
-        const monthNames = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+        var date;
 
-        function initBodycamClock(){
-            d = new Date();
-            h = d.getHours();
-            m = d.getMinutes();
-            s = d.getSeconds();
-            try {
-                t = d.toLocaleTimeString('en', {timeZoneName:'short'}).split(' ')[2] || "LT";
-            } catch (e) {
-                t = "LT";
-            }
-            updateBodycamClockDisplay();
-            if (animate) clearTimeout(animate);
-            animate = setTimeout(runBodycamClock, 1000);
-        };
+        function updateTime() {
+            date = new Date();
+            var month = (date.getMonth() + 1).toString().padStart(2, '0');
+            var day = date.getDate().toString().padStart(2, '0');
+            var year = date.getFullYear();
+            var hour = date.getHours().toString().padStart(2, '0');
+            var minute = date.getMinutes().toString().padStart(2, '0');
+            var second = date.getSeconds().toString().padStart(2, '0');
 
-        function runBodycamClock(){
-            s++;
-            if(s==60){ s=0; m++;
-                if(m==60){ m=0; h++;
-                    if(h==24){ h=0; d = new Date(); }
-                }
-            }
-            updateBodycamClockDisplay();
-            animate = setTimeout(runBodycamClock, 1000);
-        };
-        
-        function formatTwoDigits(val) {
-            return val < 10 ? '0' + val : val;
+            $("#bodycamMonth").html(month);
+            $("#bodycamDay").html(day);
+            $("#bodycamYear").html(year);
+            $("#bodycamHr").html(hour);
+            $("#bodycamMin").html(minute);
+            $("#bodycamSec").html(second);
+            $("#bodycamTz").html(date.toLocaleTimeString('en', {timeZoneName:'short'}).split(' ')[2] || "LT");
         }
 
-        function updateBodycamClockDisplay(){
+        function updatePlayerDisplay() {
             if(playerBodycamNameEl) playerBodycamNameEl.innerHTML = `${playerInfo.rank || ''} ${playerInfo.name || ''}`.trim();
-            if(playerBodycamAgencyEl) playerBodycamAgencyEl.innerHTML = playerInfo.agency || playerInfo.job || '';
-            
-            if(bodycamMonthEl) bodycamMonthEl.innerHTML = monthNames[d.getMonth()];
-            if(bodycamDayEl) bodycamDayEl.innerHTML = formatTwoDigits(d.getDate());
-            if(bodycamYearEl) bodycamYearEl.innerHTML = d.getFullYear();
-            if(bodycamHrEl) bodycamHrEl.innerHTML = formatTwoDigits(h);
-            if(bodycamMinEl) bodycamMinEl.innerHTML = formatTwoDigits(m);
-            if(bodycamSecEl) bodycamSecEl.innerHTML = formatTwoDigits(s);
-            if(bodycamTzEl) bodycamTzEl.innerHTML = t;
-        };
+            if(playerBodycamAgencyEl) playerBodycamAgencyEl.innerHTML = playerInfo.job || '';
+        }
 
         function updateSignal(strength) { // strength 0-100
             const activeBars = Math.ceil(strength / 25);
@@ -454,10 +433,10 @@
                     bodycamLogoEl.style.display = 'none';
                 }
                 bodycamOverlay.style.display = 'flex';
-                initBodycamClock();
+                updateTime();
+                updatePlayerDisplay();
             } else if (item.action === "hideOverlay") {
                 bodycamOverlay.style.display = 'none';
-                if(animate) clearTimeout(animate);
                 
                 const batteryEmptyEl = document.getElementById('batteryEmptyOverlay');
                 if (batteryEmptyEl) {
@@ -472,7 +451,8 @@
                 playerInfo.rank = item.data.rank || "";
                 playerInfo.job = item.data.job || "Unemployed";
                 playerInfo.agency = item.data.job || "LSPD";
-                updateBodycamClockDisplay();
+                updatePlayerDisplay();
+                updateTime();
             } else if (item.action === "updateHUD") {
                 let shouldShowHud = (item.showBattery || item.showSignal);
                 const hudContainer = document.querySelector('.hud-container');
@@ -506,7 +486,6 @@
             } else if (item.action === "showBatteryEmpty") {
                 stopStatic();
                 bodycamOverlay.style.display = 'none';
-                if(animate) clearTimeout(animate);
 
                 const batteryEmptyEl = document.getElementById('batteryEmptyOverlay');
                 if (batteryEmptyEl) {
@@ -515,7 +494,6 @@
             } else if (item.action === "showConnectionLost") {
                 stopStatic();
                 bodycamOverlay.style.display = 'none';
-                if(animate) clearTimeout(animate);
 
                 const connLostEl = document.getElementById('connectionLostOverlay');
                 if (connLostEl) {

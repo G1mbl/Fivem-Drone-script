@@ -1,164 +1,11 @@
 --Todo:
     -- HideHUD
     -- 2. Variant for JSOC
-    
-
-
 
 -- ========================================
 -- CONFIGURATION SETTINGS
 -- ========================================
-local Config = {
-    -- Framework Settings
-    Framework = "esx",            -- Set to "esx" or "qb"
-    
-    -- Drone Physics & Controls
-    DroneSpeed = 5.0,
-    RotationSpeed = 120.0,
-    MouseSensitivity = 1.0,
-    RotationZoomScaling = false,
-    ZoomSpeed = 10.0,
-    MinFOV = 10.0,
-    MaxFOV = 70.0,
-    SpeedBoostMultiplier = 2.0,
-    
-    -- Drone Model & Health
-    DroneModel = `ch_prop_casino_drone_01a`, -- Drone 3D model hash
-    DroneHealth = 10,            -- Drone health points
-    CameraOffset = vector3(0.0, 0.0, 0.1), -- Camera offset from drone (x, y, z)
-    
-    
-    -- Map & Minimap Settings
-    ShowMapMarker = true,         -- Show drone marker on map
-    BlipSprite = 613,             -- Drone blip sprite ID (613 = drone icon)
-    BlipColor = 3,                -- Drone blip color (3 = blue)
-    BlipScale = 0.8,              -- Drone blip scale
-
-    -- Job Configuration
-    Jobs = {
-        ["police"] = {
-            enabled = true,
-            displayName = "Police Department",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg/1280px-Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg.png",
-            canUseVision = true
-        },
-        ["jsoc"] = {
-            enabled = true,
-            displayName = "Joint Special Operations Command",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg/1280px-Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg.png",
-            canUseVision = true
-        },
-        ["default"] = {
-            enabled = true,
-            displayName = "Drone Camera",
-            logoUrl = "https://i.imgur.com/TNiLwIZ.png",
-            canUseVision = true
-        }
-    },
-
-
-    -- HUD Configuration
-    HUD = {
-        disableComponents = true,    -- Enable/disable HUD component hiding
-        hiddenComponents = {
-            1,   -- WANTED_STARS
-            2,   -- WEAPON_ICON
-            3,   -- CASH
-            4,   -- MP_CASH
-            6,   -- VEHICLE_NAME
-            7,   -- AREA_NAME
-            8,   -- VEHICLE_CLASS
-            9,   -- STREET_NAME
-            13,  -- CASH_CHANGE
-            17,  -- SAVE_GAME
-            20,  -- STAMINA
-            21,  -- BREATH
-            22   -- THROW_GRENADE
-        },
-        hideRadar = true,           -- Hide minimap/radar
-        hideHealthArmor = true,     -- Hide health and armor bars
-        hideWeaponWheel = true      -- Hide weapon wheel
-    },
-
-    --Visuals
-    Animation = {
-        dict = "anim@heists@ornate_bank@hack",
-        name = "hack_loop", 
-    },
-    
-    -- Prop Configuration
-    Prop = {
-        enabled = true,           -- Enable/disable prop
-        model = `prop_laptop_01a`, -- Laptop model hash
-        bone = 0,                 -- World placement (not attached to bone)
-        groundOffset = vector3(0.5, 0.7, -1.0), -- Offset from player position on ground
-        rotation = vector3(0.0, 0.0, 0.0), -- Laptop rotation
-    },
-    
-    -- Control Keys
-    Keys = {
-        Forward = 32,       -- W key
-        Backward = 33,      -- S key
-        Ascend = 22,        -- Space key
-        Descend = 21,       -- Left Shift key
-        StrafeLeft = 34,    -- A key
-        StrafeRight = 35,   -- D key
-        RotateLeft = 44,    -- Q key
-        RotateRight = 38,   -- E key
-        Boost = 36,         -- Left Ctrl key
-        VisionToggle = 74,  -- H key (Night/Thermal vision)
-        Exit = 23,          -- F key
-    },
-
-    Sound = {
-        Set = "special_soundset",
-        Hover = "Error",
-        Manouver = "Wow",
-        RenderDistance = 100.0,    -- Distance at which sounds can be heard
-        Update = 150,              -- Sound update interval in milliseconds
-    },
-
-    DestructionEffect = {
-        asset = 'core',
-        name = 'ent_dst_elec_fire_sp',
-        scale = 1.75,
-        loopAmount = 7,
-        loopDelay = 75
-    },
-    DestructionSound = {
-        name = 'ent_amb_elec_crackle',
-        set = "0"
-    },
-
-    -- NEW: Runtime Limiter (Battery)
-    RuntimeLimiter = {
-        enabled = true,                     -- Enable/disable battery feature
-        batteryDuration = 30,              -- Battery duration in seconds (e.g., 300s = 5 minutes)
-        lowBatteryWarningThreshold = 0.30,  -- Show warning when battery is at 20%
-        overlayFlashDuration = 1500,        -- How long the "Battery Empty" overlay flashes (ms)
-        lowBatteryColor = {r = 255, g = 165, b = 0, a = 255}, -- Orange for low battery
-        criticalBatteryColor = {r = 255, g = 0, b = 0, a = 255} -- Red for critical
-    },
-
-    -- NEW: Distance Limiter
-    DistanceLimiter = {
-        enabled = true,                     -- Enable/disable distance limit feature
-        maxDistance = 100.0,                -- Maximum distance from start point in meters
-        effectStartPercentage = 0.50,       -- Worsening connection starts at 50% of maxDistance
-        degradationExponent = 5.0,          -- Higher value = slower start, much faster ramp-up at the end.
-        maxNoiseIntensity = 0.1,            -- Max opacity for the static overlay (0.0 to 1.0)
-        maxTimecycleStrength = 0.8,
-        maxFovDistortion = 5.0,             -- Max additional FOV due to distortion
-
-        NoiseEffect = {
-            enabled = true
-        },
-
-        NoiseSound = {
-            enabled = true
-        }
-    },
-}
+-- local Config = { ... existing code ... } was removed
 
 local ESX = nil
 local QBCore = nil
@@ -218,11 +65,11 @@ CreateThread(function()
 end)
 
 local function createDroneBlip()
-    if Config.ShowMapMarker and droneEntity and DoesEntityExist(droneEntity) then
+    if Config.MapMarker.enabled and droneEntity and DoesEntityExist(droneEntity) then
         droneBlip = AddBlipForEntity(droneEntity)
-        SetBlipSprite(droneBlip, Config.BlipSprite)
-        SetBlipColour(droneBlip, Config.BlipColor)
-        SetBlipScale(droneBlip, Config.BlipScale)
+        SetBlipSprite(droneBlip, Config.MapMarker.sprite)
+        SetBlipColour(droneBlip, Config.MapMarker.color)
+        SetBlipScale(droneBlip, Config.MapMarker.scale)
         SetBlipAsShortRange(droneBlip, false)
         BeginTextCommandSetBlipName("STRING")
         AddTextComponentString("Active Drone")
@@ -668,7 +515,7 @@ AddEventHandler("drone:setPlayerData", function(data)
     if data then
         playerData.name = data.name
         playerData.job = data.job
-        playerData.grade = data.grade
+        playerData.grade = data.rank -- Match the key from the server event
         
         if controllingDrone then
             updatePlayerData() 
@@ -732,9 +579,11 @@ local function controlDrone()
     droneCoordsStart = GetEntityCoords(ped) 
     soundTimer = GetGameTimer()
 
+    TriggerServerEvent("drone:sendPlayerData") -- Request data from server
+
     saveOriginalHudState()
-    loadOverlay() -- Activate the correct overlay (HTML or prepare for texture)
-    updatePlayerData()
+    -- loadOverlay() -- This will be called by setPlayerData
+    -- updatePlayerData() -- This will be called by setPlayerData
 
     SetEntityVisible(ped, true, true)
     FreezeEntityPosition(ped, false)
@@ -1038,13 +887,6 @@ function destroyDrone(entity)
         
         -- Instantly delete the drone entity
         DeleteEntity(entity)
-    end
-end
-
-local function playNoiseSound()
-    if not isNoiseSoundPlaying and Config.DistanceLimiter.NoiseSound.enabled then
-        noiseSoundId = GetSoundId()
-        -- ... existing code ...
     end
 end
 
