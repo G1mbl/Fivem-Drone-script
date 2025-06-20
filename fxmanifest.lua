@@ -1,5 +1,8 @@
 fx_version 'cerulean'
 game 'gta5'
+description 'Drone script'
+version '1.2.3'
+
 
 client_scripts {
     'config.lua',
