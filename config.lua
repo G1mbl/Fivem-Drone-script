@@ -13,11 +13,11 @@ Config = {
     -- `logoUrl`: Image URL for the department logo on the UI.
     -- `canUseVision`: Can this job toggle Night and Thermal vision?
     ----------------------------------------------------------------
-    Jobs = {
+    Jobs = {     
         ["police"] = {
             enabled = true,
             displayName = "Police Department",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg/1280px-Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg.png",
+            logoUrl = "images/LSPD.png",
             canUseVision = true
         },
         ["jsoc"] = {
@@ -29,7 +29,7 @@ Config = {
         ["default"] = {
             enabled = true,             -- This should generally be true to provide a fallback.
             displayName = "Drone Camera",
-            logoUrl = "https://i.imgur.com/TNiLwIZ.png",
+            logoUrl = "images/default.png",
             canUseVision = true         -- Allow vision modes for non-job players if RequireJob is false.
         }
     },
@@ -163,6 +163,6 @@ Config = {
     },
     DestructionSound = {
         name = 'ent_amb_elec_crackle',
-        set = "0"
+        set = "",
     },
 } 

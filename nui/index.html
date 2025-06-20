@@ -398,7 +398,11 @@
         }
 
         function updatePlayerDisplay() {
-            if(playerBodycamNameEl) playerBodycamNameEl.innerHTML = `${playerInfo.rank || ''} ${playerInfo.name || ''}`.trim();
+            // Only show rank if it's not empty, otherwise just show the name
+            const displayName = playerInfo.rank && playerInfo.rank.trim() !== '' 
+                ? `${playerInfo.rank} ${playerInfo.name || ''}`.trim() 
+                : (playerInfo.name || '');
+            if(playerBodycamNameEl) playerBodycamNameEl.innerHTML = displayName;
             if(playerBodycamAgencyEl) playerBodycamAgencyEl.innerHTML = playerInfo.job || '';
         }
 
@@ -421,10 +425,28 @@
             }
         }
 
+        // Listen for NUI messages from the client script
         window.addEventListener('message', function(event) {
-            const item = event.data;
+            var item = event.data;
+            if (item.type === "update") {
+                // Update basic info
+                updateText("playerBodycamName", item.name);
+                updateText("playerBodycamAgency", item.job.displayName);
 
-            if (item.action === "showOverlay") {
+                // Update logo
+                if (item.job.logoUrl) {
+                    var logoElement = document.querySelector('#bodycam .logo');
+                    if (!logoElement) {
+                        logoElement = document.createElement('img');
+                        logoElement.className = 'logo';
+                        document.querySelector('.info-container').prepend(logoElement);
+                    }
+                    logoElement.src = item.job.logoUrl;
+                }
+
+                // Update time
+                updateTime(item.time);
+            } else if (item.action === "showOverlay") {
                 playerInfo.agency = item.agencyName || playerInfo.agency;
                 if (item.logoUrl && item.logoUrl !== "") {
                     bodycamLogoEl.src = item.logoUrl;
@@ -449,7 +471,7 @@
             } else if (item.action === "updatePlayerData") {
                 playerInfo.name = item.data.name || "Unknown";
                 playerInfo.rank = item.data.rank || "";
-                playerInfo.job = item.data.job || "Unemployed";
+                playerInfo.job = item.data.job || "";
                 playerInfo.agency = item.data.job || "LSPD";
                 updatePlayerDisplay();
                 updateTime();
