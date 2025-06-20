@@ -18,6 +18,11 @@ ui_page 'nui/index.html'
 
 files {
     'nui/index.html',
+    'nui/images/*.png',
+    'nui/images/*.jpg',
+    'nui/images/*.jpeg',
+    'nui/images/*.svg',
+    'nui/images/*.gif',
     'data/audioexample_sounds.dat54.rel',
     'audiodirectory/custom_sounds.awc',
 }

@@ -1,11 +1,12 @@
 --Todo:
     -- HideHUD
     -- 2. Variant for JSOC
+    -- fix drone tilt glitch 
+    --
 
 -- ========================================
 -- CONFIGURATION SETTINGS
 -- ========================================
--- local Config = { ... existing code ... } was removed
 
 local ESX = nil
 local QBCore = nil
@@ -150,7 +151,7 @@ end
 
 
 local function getPlayerJob()
-    local jobName = "unemployed" -- Default
+    local jobName = "" -- Default
     local sourceOfJob = "initial_default"
 
     if Config.Framework == "esx" then
@@ -207,7 +208,7 @@ if Config.Framework == "esx" then
     AddEventHandler('esx:setJob', function(job)
         playerJob = job.name
         if controllingDrone then
-            loadOverlay()
+            updatePlayerData() -- Now handles both data and overlay
         end
     end)
 elseif Config.Framework == "qb" then
@@ -220,7 +221,7 @@ elseif Config.Framework == "qb" then
     AddEventHandler('QBCore:Client:OnJobUpdate', function(JobInfo)
         playerJob = JobInfo.name
         if controllingDrone then
-            loadOverlay()
+            updatePlayerData() -- Now handles both data and overlay
         end
     end)
 end
@@ -454,26 +455,64 @@ local function hideOverlay()
     })
 end
 
--- Update player data and send to NUI
+-- Update player data and send to NUI (now includes overlay loading)
 local function updatePlayerData()
     local pInfo = getPlayerInfo() -- Use the consistent function to get player details
-    local jobConfig = Config.Jobs[pInfo.job] or Config.Jobs.default
+    local currentJob = getPlayerJob() 
+    local jobConfig = Config.Jobs[currentJob] or Config.Jobs.default
 
+    -- Determine rank and job display based on employment status and hideRank flag
+    local displayRank = pInfo.rank
+    local displayJob = pInfo.job
+    
+    -- Check if we should hide the rank based on the hideRank flag
+    if jobConfig and jobConfig.hideRank then
+        displayRank = ""
+    end
+    
+    if currentJob == "unemployed" or currentJob == "" then
+        displayJob = (jobConfig and jobConfig.displayName) or "Drone cam"
+    else
+        displayJob = (jobConfig and jobConfig.displayName) or pInfo.job
+    end
+
+    -- Send player data update
     SendNUIMessage({
         action = "updatePlayerData",
         data = {
             name = pInfo.name,
-            rank = pInfo.rank,
-            job = (jobConfig and jobConfig.displayName) or pInfo.job
+            rank = displayRank,
+            job = displayJob
         }
     })
+
+    -- Load overlay based on job configuration
+    if jobConfig  then
+        local nuiData = {
+            action = "showOverlay",
+            overlayType = "bodycam"
+        }
+        if jobConfig.logoUrl and jobConfig.logoUrl ~= "" then
+            -- If the path is not already an absolute URL or nui:// reference, treat it as local
+            if not string.find(jobConfig.logoUrl, "^https?://") and not string.find(jobConfig.logoUrl, "^nui://") then
+                local resourceName = GetCurrentResourceName()
+                -- Ensure there's no leading slash in the logoUrl
+                local sanitizedPath = jobConfig.logoUrl:gsub("^/", "")
+                nuiData.logoUrl = ("https://cfx-nui-%s/nui/%s"):format(resourceName, sanitizedPath)
+            else
+                nuiData.logoUrl = jobConfig.logoUrl
+            end
+        end
+        SendNUIMessage(nuiData)
+    else
+        SendNUIMessage({ action = "hideOverlay" }) -- Hide if no valid config
+    end
 end
 
 -- Function to toggle overlay visibility based on drone activity
 local function toggleOverlayVisibility(isActive)
     if isActive then
-        loadOverlay() -- This will determine and show the correct overlay (HTML or texture)
-        updatePlayerData() -- Send initial player data when drone becomes active
+        updatePlayerData() -- Now handles both data update and overlay loading
     else
         hideOverlay() -- This tells NUI to hide all HTML overlays
     end
@@ -493,20 +532,8 @@ AddEventHandler("drone:updateJob", function(newJobData) -- Assuming newJobData c
 
     playerJob = jobName -- Update the global playerJob variable
 
-    -- Update NUI with potentially new player info due to job change
-    local currentPlayerData = getPlayerInfo() -- This will now reflect the new job
-    local jobConfig = Config.Jobs[currentPlayerData.job] or Config.Jobs.default
-    SendNUIMessage({
-        action = "updatePlayerData",
-        data = {
-            name = currentPlayerData.name,
-            rank = currentPlayerData.rank,
-            job = (jobConfig and jobConfig.displayName) or currentPlayerData.job
-        }
-    })
-
     if controllingDrone then
-        loadOverlay() -- Reload overlay if player is currently controlling a drone
+        updatePlayerData() -- Now handles both data update and overlay loading
     end
 end)
 
@@ -516,10 +543,13 @@ AddEventHandler("drone:setPlayerData", function(data)
         playerData.name = data.name
         playerData.job = data.job
         playerData.grade = data.rank -- Match the key from the server event
+
+        if playerData.grade == "Unemployed" then
+            playerData.grade = ""
+        end
         
         if controllingDrone then
-            updatePlayerData() 
-            loadOverlay()      
+            updatePlayerData() -- Now handles both data update and overlay loading
         end
     end
 end)
@@ -868,24 +898,9 @@ end
 function destroyDrone(entity)
     if entity and DoesEntityExist(entity) then
         local destroyedCoords = GetEntityCoords(entity)
-        
-        -- Play sound once
-        PlaySoundFromCoord(-1, Config.DestructionSound.name, destroyedCoords.x, destroyedCoords.y, destroyedCoords.z, Config.DestructionSound.set, false, 0, false)
+        local netId = NetworkGetNetworkIdFromEntity(entity)
+        TriggerServerEvent("drone:initiateDestruction", netId, destroyedCoords)
 
-        -- Loop particle effects in a new thread
-        CreateThread(function()
-            RequestNamedPtfxAsset(Config.DestructionEffect.asset)
-            while not HasNamedPtfxAssetLoaded(Config.DestructionEffect.asset) do
-                Wait(50)
-            end
-            UseParticleFxAssetNextCall(Config.DestructionEffect.asset)
-            for i = 1, Config.DestructionEffect.loopAmount do
-                StartParticleFxNonLoopedAtCoord(Config.DestructionEffect.name, destroyedCoords.x, destroyedCoords.y, destroyedCoords.z, 0.0, 0.0, 0.0, Config.DestructionEffect.scale, false, false, false)
-                Wait(Config.DestructionEffect.loopDelay)
-            end
-        end)
-        
-        -- Instantly delete the drone entity
         DeleteEntity(entity)
     end
 end
@@ -999,25 +1014,6 @@ RegisterNUICallback("flashMessageComplete", function(data, cb)
     cb("ok")
 end)
 
-function loadOverlay()
-    local currentJob = getPlayerJob() 
-    local logoConfig = Config.Jobs[currentJob] or Config.Jobs["default"]
-
-    if logoConfig and logoConfig.enabled then
-        local nuiData = {
-            action = "showOverlay",
-            overlayType = "bodycam"
-        }
-        if logoConfig.logoUrl then
-            nuiData.logoUrl = logoConfig.logoUrl
-        end
-        SendNUIMessage(nuiData)
-    else
-        SendNUIMessage({ action = "hideOverlay" }) -- Hide if no valid config
-    end
-    -- Persistent HUD (battery/signal) is managed by NUI via "updateHUD" messages from DrawDroneOverlay
-end
-
 RegisterCommand("drone_test_noise", function()
     if controllingDrone then
         isNoiseTestActive = not isNoiseTestActive
@@ -1039,3 +1035,30 @@ RegisterCommand("drone_test_noise", function()
         })
     end
 end, false)
+
+RegisterNetEvent("drone:playDestructionEffect")
+AddEventHandler("drone:playDestructionEffect", function(netId, coords, ownerPlayerId)
+    -- Stop any ongoing drone sounds for this netId first
+    if currentSoundId ~= -1 then
+        stopDroneSound()
+    end
+    
+    -- Play destruction effect at the specified coordinates for all players
+    if coords then
+        -- Add particle effects (sparks, explosion, etc.)
+        RequestNamedPtfxAsset("core")
+        while not HasNamedPtfxAssetLoaded("core") do
+            Wait(1)
+        end
+        
+        -- Play spark effect
+        UseParticleFxAssetNextCall("core")
+        StartParticleFxNonLoopedAtCoord("ent_sht_electrical_box", coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 1.0, false, false, false)
+        
+        -- Optional: Add explosion effect
+        -- AddExplosion(coords.x, coords.y, coords.z, 1, 0.5, true, false, 0.2, false)
+        
+        -- Optional: Play destruction sound
+        PlaySoundFromCoord(-1, "DRONE_DESTROYED", coords.x, coords.y, coords.z, Config.Sound.Set or "", false, 50.0, false)
+    end
+end)

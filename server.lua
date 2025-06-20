@@ -177,9 +177,8 @@ end)
 -- New event handler for when a client initiates drone destruction
 RegisterNetEvent("drone:initiateDestruction")
 AddEventHandler("drone:initiateDestruction", function(destroyedNetId, effectCoords)
-    local src = source -- This is the player who was controlling the drone
-
-    -- Spark effect broadcast to other clients is removed.
+    local src = source -- This is the player who was controlling the drone    -- Broadcast destruction effect to all clients (including the drone owner)
+    TriggerClientEvent("drone:playDestructionEffect", -1, destroyedNetId, effectCoords, src)
 
     if drones[src] then
         local serverKnownNetId = drones[src].netId
@@ -192,14 +191,11 @@ AddEventHandler("drone:initiateDestruction", function(destroyedNetId, effectCoor
         drones[src].active = false
         
         CreateThread(function()
-            Wait(1000) -- Delay before removing from sync, client handles visual delay of falling
             if drones[src] and not drones[src].active then
                 drones[src] = nil
                 TriggerClientEvent("drone:syncAll", -1, drones)
             end
         end)
-    else
-        -- print(string.format("[DRONE_SCRIPT] Warning: drone:initiateDestruction called for src %s, but no active drone found.", src))
     end
 end)
 
