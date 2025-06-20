@@ -1,12 +1,8 @@
-# 🛰️ FiveM Drone Script [ESX/QB]
-
-A **free**, feature-rich drone script for FiveM built with support for **ESX** and **QB-Core** frameworks.
-
-> ⚠️ Note: QB-Core is theoretically supported but not fully tested.
+# FiveM Drone Script [ESX/QB][FREE]
 
 ---
 
-## 🚀 Features
+##  Features
 
 -  **Job Selection**  
 
@@ -16,14 +12,13 @@ A **free**, feature-rich drone script for FiveM built with support for **ESX** a
 
 -  **ESX & QB-Core Compatibility**  
  
-
 - **Runtime Limiter (Battery)** *(optional)*  
  
 - 📡 **Distance Limiter** *(optional)*  
 
 ---
 
-## 📌 Notes
+##  Notes
 
 - qb core not tested but the variables are in place
 
