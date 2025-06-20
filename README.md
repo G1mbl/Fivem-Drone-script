@@ -2,12 +2,12 @@
 A free [ESX/QB] fivem Drone script 
 
 Features:
-#-Jobselect(custom picture)
-#-Player Display in Hud 
-#-Own sounddesign 
-#-esx/qb support
-#-RuntimeLimiter(aka. Battery)(optional)
-#-Distanzlimiter(optional)
+#Jobselect(custom picture)
+#Player Display in Hud 
+#Own sounddesign 
+#esx/qb support
+#RuntimeLimiter(aka. Battery)(optional)
+#Distanzlimiter(optional)
 #
 #
 #
