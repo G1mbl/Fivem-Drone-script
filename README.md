@@ -4,7 +4,7 @@
 
 ##  Features
 
--  **extensive config"
+-  **extensive config**
 
 -  **Job Selection**  
 
