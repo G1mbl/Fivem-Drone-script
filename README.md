@@ -4,6 +4,8 @@
 
 ##  Features
 
+-  **extensive config"
+
 -  **Job Selection**  
 
 -  **Player Display in HUD**
@@ -12,9 +14,9 @@
 
 -  **ESX & QB-Core Compatibility**  
  
-- **Runtime Limiter (Battery)** *(optional)*  
+-  **Runtime Limiter (Battery)** *(optional)*  
  
-- 📡 **Distance Limiter** *(optional)*  
+-  **Distance Limiter** *(optional)*  
 
 ---
 
