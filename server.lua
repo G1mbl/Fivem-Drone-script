@@ -1,11 +1,3 @@
-local Config = {
-    Framework = "esx",            
-    ItemName = "drone",           
-    RequireJob = false,           
-    AllowedJobs = {"police", "ems", "mechanic"},
-    CleanupInterval = 300000,
-}
-
 local ESX = nil
 local QBCore = nil
 
@@ -67,8 +59,9 @@ local function hasRequiredJob(src)
     
     if not job then return false end
     
-    for _, allowedJob in pairs(Config.AllowedJobs) do
-        if job == allowedJob then return true end
+    -- Check if the job exists in the Config.Jobs table and is enabled
+    if Config.Jobs[job] and Config.Jobs[job].enabled then
+        return true
     end
     
     return false
@@ -238,14 +231,7 @@ CreateThread(function()
             
             local xPlayer = ESX.GetPlayerFromId(src)
             if xPlayer then
-                -- Send player data to client first
-                local playerData = {
-                    name = xPlayer.getName and xPlayer.getName() or GetPlayerName(src),
-                    job = xPlayer.job.name,
-                    grade = xPlayer.job.grade_label or xPlayer.job.grade_name
-                }
-                TriggerClientEvent("drone:setPlayerData", src, playerData)
-                Wait(100)
+                -- Player data is now requested by the client, so we just trigger the use event.
                 TriggerClientEvent("drone:useItem", src)
                 xPlayer.removeInventoryItem(Config.ItemName, 1)
             end
@@ -261,13 +247,7 @@ CreateThread(function()
             
             local Player = QBCore.Functions.GetPlayer(src)
             if Player then
-                -- Send player data to client first
-                local playerData = {
-                    name = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname,
-                    job = Player.PlayerData.job.name,
-                    grade = Player.PlayerData.job.grade.name
-                }
-                TriggerClientEvent("drone:setPlayerData", src, playerData)
+                -- Player data is now requested by the client, so we just trigger the use event.
                 TriggerClientEvent("drone:useItem", src)
                 Player.Functions.RemoveItem(Config.ItemName, 1)
                 TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[Config.ItemName], "remove", 1)
@@ -285,19 +265,19 @@ AddEventHandler("drone:sendPlayerData", function()
         local xPlayer = ESX.GetPlayerFromId(src)
         if xPlayer then
             playerName = xPlayer.getName()
-            playerRank = xPlayer.getGroup() or "Unknown"
             playerJob = xPlayer.job.name
+            playerRank = xPlayer.job.grade_label or xPlayer.job.grade_name or "Unknown"
         end
     elseif Config.Framework == "qb" then
         local Player = QBCore.Functions.GetPlayer(src)
         if Player then
-            playerName = Player.PlayerData.name
-            playerRank = Player.PlayerData.rank or "Unknown"
+            playerName = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname
             playerJob = Player.PlayerData.job.name
+            playerRank = Player.PlayerData.job.grade.name or "Unknown"
         end
     end
 
-    TriggerClientEvent("drone:updatePlayerData", src, {
+    TriggerClientEvent("drone:setPlayerData", src, {
         name = playerName,
         rank = playerRank,
         job = playerJob
