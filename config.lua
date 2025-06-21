@@ -3,34 +3,30 @@ Config = {
     -- GENERAL & FRAMEWORK SETTINGS
     ----------------------------------------------------------------
     Framework = "esx",              -- "esx" or "qb"
-    ItemName = "drone",             -- The item name required to use the drone.
-    RequireJob = false,             -- If true, players need a job from the list below to use the drone.
+    ItemName = "drone",            
+    RequireJob = false,             
 
     ----------------------------------------------------------------
     -- JOB CONFIGURATION
-    -- `enabled`: If `RequireJob` is true, can this job use the drone?
     -- `displayName`: Name shown on the drone UI.
     -- `logoUrl`: Image URL for the department logo on the UI.
-    -- `canUseVision`: Can this job toggle Night and Thermal vision?
+    -- `canUseVision`: Can this job toggle Night and Thermal vision
     ----------------------------------------------------------------
     Jobs = {     
         ["police"] = {
-            enabled = true,
             displayName = "Police Department",
             logoUrl = "images/LSPD.png",
             canUseVision = true
         },
         ["jsoc"] = {
-            enabled = true,
             displayName = "Joint Special Operations Command",
             logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg/1280px-Seal_of_the_Joint_Special_Operations_Command_%28JSOC%29.svg.png",
             canUseVision = true
         },
-        ["default"] = {
-            enabled = true,             -- This should generally be true to provide a fallback.
+        ["default"] = {  
             displayName = "Drone Camera",
             logoUrl = "images/default.png",
-            canUseVision = true         -- Allow vision modes for non-job players if RequireJob is false.
+            canUseVision = true         
         }
     },
 
@@ -38,21 +34,20 @@ Config = {
     -- DRONE MODEL & PERFORMANCE
     ----------------------------------------------------------------
     -- Core Properties
-    DroneModel = `ch_prop_casino_drone_01a`, -- Drone's 3D model.
-    DroneHealth = 10,                       -- How much damage the drone can take before breaking.
+    DroneModel = `ch_prop_casino_drone_01a`, 
+    DroneHealth = 25,                      
 
     -- Physics & Controls
-    DroneSpeed = 5.0,                       -- Base movement speed.
-    SpeedBoostMultiplier = 2.0,             -- Speed multiplier when boosting.
-    RotationSpeed = 120.0,                  -- How fast the drone turns.
-    MouseSensitivity = 1.0,                 -- Mouse look sensitivity.
-
+    DroneSpeed = 5.0,                       
+    SpeedBoostMultiplier = 2.5,             -- Speed multiplier when boosting.
+    RotationSpeed = 120.0,                  
+    MouseSensitivity = 1.5,                
     -- Camera
-    CameraOffset = vector3(0.0, 0.0, 0.1),  -- Camera position relative to the drone model.
-    MaxFOV = 70.0,                          -- Default Field of View (widest).
-    MinFOV = 10.0,                          -- Zoomed-in Field of View (narrowest).
-    ZoomSpeed = 10.0,                       -- How fast the camera zooms in/out.
-    RotationZoomScaling = false,            -- If true, slows down rotation speed when zoomed in.
+    CameraOffset = vector3(0.0, 0.0, 0.1),  
+    MaxFOV = 90.0,                          
+    MinFOV = 5.0,                          
+    ZoomSpeed = 5.0,                       
+    RotationZoomScaling = false,           
 
     ----------------------------------------------------------------
     -- CONTROLS
@@ -73,30 +68,29 @@ Config = {
     },
 
     ----------------------------------------------------------------
-    -- FEATURES
-    ----------------------------------------------------------------
     -- Battery / Runtime Limiter
+    ----------------------------------------------------------------
     RuntimeLimiter = {
         enabled = true,                     -- Enable/disable the battery feature.
-        batteryDuration = 30,               -- Battery life in seconds.
+        batteryDuration = 600,               -- Battery life in seconds.
         lowBatteryWarningThreshold = 0.30,  -- Show warning when battery is at 30% or less.
         overlayFlashDuration = 1500,        -- Not currently used, but for future features.
         lowBatteryColor = {r = 255, g = 165, b = 0, a = 255}, -- Orange for low battery bar.
         criticalBatteryColor = {r = 255, g = 0, b = 0, a = 255} -- Red for critical battery bar.
     },
 
-    -- Signal / Distance Limiter
+    ----------------------------------------------------------------
+    -- SIGNAL / DISTANCE LIMITER
+    ----------------------------------------------------------------     
     DistanceLimiter = {
-        enabled = true,                     -- Enable/disable the signal distance limit.
-        maxDistance = 100.0,                -- Max distance in meters from the player before connection is lost.
-        effectStartPercentage = 0.50,       -- Signal degradation effects start at 50% of maxDistance.
-        degradationExponent = 5.0,          -- Higher value = slower start, much faster ramp-up at the end.
-        maxNoiseIntensity = 0.1,            -- Max opacity for the static overlay (0.0 to 1.0).
-        maxTimecycleStrength = 0.8,         -- Not currently used.
-        maxFovDistortion = 5.0,             -- Max additional FOV due to signal distortion.
-
+        enabled = true,                    
+        maxDistance = 300.0,                -- Max distance in meters from the player before connection is lost.
+        effectStartPercentage = 0.5,       
         NoiseEffect = {
-            enabled = true                  -- Enable/disable visual static effect on screen.
+            enabled = true,                 
+            noiseStartPercentage = 0.8,     
+            maxNoiseIntensity = 0.75,       
+            degradationExponent = 7.5       -- Higher value = slower start, much faster ramp-up at the end (noise only).
         },
         NoiseSound = {
             enabled = true                  -- Enable/disable audio static/interference sound.
@@ -106,7 +100,6 @@ Config = {
     ----------------------------------------------------------------
     -- PLAYER ANIMATION & PROP
     ----------------------------------------------------------------
-    -- Animation played by the player character while flying the drone.
     Animation = {
         dict = "anim@heists@ornate_bank@hack",
         name = "hack_loop",
@@ -124,7 +117,6 @@ Config = {
     ----------------------------------------------------------------
     -- UI & VISUALS
     ----------------------------------------------------------------
-    -- General HUD hiding rules
     HUD = {
         disableComponents = true,    -- If true, hides certain vanilla HUD elements.
         hiddenComponents = { 1, 2, 3, 4, 6, 7, 8, 9, 13, 17, 20, 21, 22 },
@@ -133,18 +125,17 @@ Config = {
         hideWeaponWheel = true
     },
 
-    -- Drone's blip on the map
     MapMarker = {
         enabled = true,
-        sprite = 613,              -- Blip icon ID. 613 is a drone icon.
-        color = 3,                 -- Blip color ID. 3 is blue.
-        scale = 0.8,
+        sprite = 741,              -- Blip icon ID. 613 is a drone icon.
+        color = 1,                 -- Blip color ID. 3 is blue.
+        scale = 0.6,
+        trackRotation = false,     -- Set to true to make minimap rotate with drone heading, false to lock to north
     },
 
     ----------------------------------------------------------------
     -- EFFECTS
     ----------------------------------------------------------------
-    -- Sound effects for the drone
     Sound = {
         Set = "special_soundset",   -- The sound set in your audio files.
         Hover = "Error",            -- Sound name for hovering.
@@ -153,16 +144,16 @@ Config = {
         Update = 150,               -- How often to update the sound loop (ms).
     },
 
-    -- Visual and audio effects when the drone is destroyed.
     DestructionEffect = {
-        asset = 'core',
-        name = 'ent_dst_elec_fire_sp',
-        scale = 1.75,
+        asset = "core",
+        name = "ent_dst_elec_fire_sp",
+        scale = 0.75,
         loopAmount = 7,
         loopDelay = 75
     },
+
     DestructionSound = {
-        name = 'ent_amb_elec_crackle',
+        name = "ent_amb_elec_crackle",
         set = "",
     },
-} 
+}

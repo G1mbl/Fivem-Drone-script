@@ -472,7 +472,7 @@
                 playerInfo.name = item.data.name || "Unknown";
                 playerInfo.rank = item.data.rank || "";
                 playerInfo.job = item.data.job || "";
-                playerInfo.agency = item.data.job || "LSPD";
+                playerInfo.agency = item.data.job || "Drone Cam";
                 updatePlayerDisplay();
                 updateTime();
             } else if (item.action === "updateHUD") {
@@ -482,7 +482,10 @@
 
                 if (item.showSignal) {
                     signalContainer.style.display = 'flex';
-                    updateSignal(item.signal);
+                    // Use signal quality calculated in Lua (0-100%)
+                    const signalQuality = item.signal || 100;
+                    
+                    updateSignal(signalQuality);
                 } else {
                     signalContainer.style.display = 'none';
                 }
@@ -496,8 +499,13 @@
 
                 const staticOverlay = document.getElementById('staticOverlay');
                 if (staticOverlay) {
-                    if (item.showNoise && item.noiseLevel > 0) {
-                        staticIntensity = item.noiseLevel;
+                    // Use noise intensity calculated in Lua (0.0-1.0)
+                    const noiseIntensity = item.noiseLevel || 0.0;
+                    const shouldShowNoise = item.showNoise || false;
+                    
+                    // Apply noise effect based on calculated values from Lua
+                    if (shouldShowNoise && noiseIntensity > 0.01) {
+                        staticIntensity = noiseIntensity;
                         staticOverlay.style.display = 'block';
                         startStatic();
                     } else {

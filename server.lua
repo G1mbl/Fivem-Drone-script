@@ -60,7 +60,7 @@ local function hasRequiredJob(src)
     if not job then return false end
     
     -- Check if the job exists in the Config.Jobs table and is enabled
-    if Config.Jobs[job] and Config.Jobs[job].enabled then
+    if Config.Jobs[job] then
         return true
     end
     

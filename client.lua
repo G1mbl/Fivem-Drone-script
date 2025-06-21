@@ -2,11 +2,16 @@
     -- HideHUD
     -- 2. Variant for JSOC
     -- fix drone tilt glitch 
-    --
+    -- itemicon 
 
 -- ========================================
 -- CONFIGURATION SETTINGS
 -- ========================================
+
+-- Ensure Config.MapMarker.trackRotation has a default value if not defined
+if Config and Config.MapMarker and Config.MapMarker.trackRotation == nil then
+    Config.MapMarker.trackRotation = false -- Default to lock north instead of tracking rotation
+end
 
 local ESX = nil
 local QBCore = nil
@@ -27,9 +32,8 @@ local isNoiseTestActive = false
 local playNoiseSound, stopNoiseSound -- Forward declaration
 
 local currentDistanceToStart = 0.0
-local connectionQuality = 1.0 -- 1.0 = perfect, 0.0 = no connection
-local activeTimecycleModifier = nil
-local originalCamFOV = 70.0 -- To store camera FOV before distortion
+local calculatedSignalQuality = 100.0 -- Signal bars percentage (0-100)
+local calculatedNoiseIntensity = 0.0 -- Noise overlay intensity (0.0-1.0)
 
 local droneEntity, droneCamera = nil, nil
 local controllingDrone = false
@@ -39,6 +43,7 @@ local droneBlip = nil
 local heliCamScaleform = nil
 local propObject = nil
 local isAnimationPlaying = false
+local minimapLocked = false
 local playerData = {
     name = "",
     job = "nil",
@@ -509,14 +514,6 @@ local function updatePlayerData()
     end
 end
 
--- Function to toggle overlay visibility based on drone activity
-local function toggleOverlayVisibility(isActive)
-    if isActive then
-        updatePlayerData() -- Now handles both data update and overlay loading
-    else
-        hideOverlay() -- This tells NUI to hide all HTML overlays
-    end
-end
 
 -- Update the overlay dynamically when the player's job changes
 RegisterNetEvent("drone:updateJob")
@@ -581,22 +578,14 @@ function DrawDroneOverlay()
         local hudData = {
             action = "updateHUD",
             showBattery = Config.RuntimeLimiter.enabled,
-            showSignal = Config.DistanceLimiter.enabled
+            showSignal = Config.DistanceLimiter.enabled,
+            signal = calculatedSignalQuality,
+            showNoise = calculatedNoiseIntensity > 0.01,
+            noiseLevel = calculatedNoiseIntensity
         }
 
         if hudData.showBattery then
             hudData.battery = math.floor(currentBatteryPercentage * 100)
-        end
-
-        if hudData.showSignal then
-            hudData.signal = connectionQuality * 100
-        end
-
-        if Config.DistanceLimiter.enabled and Config.DistanceLimiter.NoiseEffect.enabled then
-            hudData.showNoise = true
-            hudData.noiseLevel = (1.0 - connectionQuality) * Config.DistanceLimiter.maxNoiseIntensity
-        else
-            hudData.showNoise = false
         end
 
         SendNUIMessage(hudData)
@@ -635,18 +624,11 @@ local function controlDrone()
     SetCamActive(droneCamera, true)
     RenderScriptCams(true, false, 0, true, false)
     SetCamFov(droneCamera, currentFOV)
-    originalCamFOV = currentFOV
 
     resetBatteryState()
 
     if Config.DistanceLimiter.enabled then
         currentDistanceToStart = 0.0
-        connectionQuality = 1.0
-        if activeTimecycleModifier then
-            ClearTimecycleModifier()
-            activeTimecycleModifier = nil
-        end
-        SetTimecycleModifierStrength(0)
     end
 
     local camRot = vector3(0.0, 0.0, GetEntityHeading(droneEntity))
@@ -710,37 +692,34 @@ local function controlDrone()
 
         if Config.DistanceLimiter.enabled and not destructionReason then
             local effectTriggerDistance = Config.DistanceLimiter.maxDistance * Config.DistanceLimiter.effectStartPercentage
-            
+
             if currentDistanceToStart > Config.DistanceLimiter.maxDistance then
                 destructionReason = "out_of_range"
-                connectionQuality = 0.0
-            elseif currentDistanceToStart > effectTriggerDistance then
-                local linearProgress = (currentDistanceToStart - effectTriggerDistance) / (Config.DistanceLimiter.maxDistance - effectTriggerDistance)
-                linearProgress = math.max(0, math.min(1, linearProgress))
-
-                local exponent = Config.DistanceLimiter.degradationExponent
-                local effectProgress = linearProgress ^ exponent
-                
-                connectionQuality = 1.0 - effectProgress
-
-                if Config.DistanceLimiter.timecycleModifier and Config.DistanceLimiter.timecycleModifier ~= "" then
-                    if not activeTimecycleModifier or activeTimecycleModifier ~= Config.DistanceLimiter.timecycleModifier then
-                        SetTimecycleModifier(Config.DistanceLimiter.timecycleModifier)
-                        activeTimecycleModifier = Config.DistanceLimiter.timecycleModifier
-                    end
-                    SetTimecycleModifierStrength(effectProgress * Config.DistanceLimiter.maxTimecycleStrength)
-                end
-
-                local fovDistortion = effectProgress * Config.DistanceLimiter.maxFovDistortion
-                SetCamFov(droneCamera, originalCamFOV + fovDistortion)
             else
-                connectionQuality = 1.0
-                if activeTimecycleModifier then
-                    ClearTimecycleModifier()
-                    SetTimecycleModifierStrength(0)
-                    activeTimecycleModifier = nil
+                -- Calculate signal bars (independent, linear degradation)
+                calculatedSignalQuality = 100.0 -- Default full signal (0-100%)
+                local signalTriggerDistance = Config.DistanceLimiter.maxDistance * Config.DistanceLimiter.effectStartPercentage
+                
+                if currentDistanceToStart > signalTriggerDistance then
+                    local signalProgress = (currentDistanceToStart - signalTriggerDistance) / (Config.DistanceLimiter.maxDistance - signalTriggerDistance)
+                    signalProgress = math.max(0, math.min(1, signalProgress))
+                    calculatedSignalQuality = math.max(0, 100 * (1 - signalProgress)) -- Linear 0-100%
                 end
-                SetCamFov(droneCamera, originalCamFOV)
+
+                -- Calculate noise overlay (independent, exponential degradation)
+                calculatedNoiseIntensity = 0.0 -- Default no noise (0.0-1.0)
+                if Config.DistanceLimiter.NoiseEffect.enabled then
+                    local noiseStartPercentage = Config.DistanceLimiter.NoiseEffect.noiseStartPercentage or Config.DistanceLimiter.effectStartPercentage
+                    local noiseTriggerDistance = Config.DistanceLimiter.maxDistance * noiseStartPercentage
+                    
+                    if currentDistanceToStart > noiseTriggerDistance then
+                        local noiseProgress = (currentDistanceToStart - noiseTriggerDistance) / (Config.DistanceLimiter.maxDistance - noiseTriggerDistance)
+                        noiseProgress = math.max(0, math.min(1, noiseProgress))
+                        local degradationExponent = Config.DistanceLimiter.NoiseEffect.degradationExponent or 15.0
+                        local exponentialProgress = noiseProgress ^ degradationExponent
+                        calculatedNoiseIntensity = exponentialProgress * Config.DistanceLimiter.NoiseEffect.maxNoiseIntensity
+                    end
+                end
             end
         end
 
@@ -778,11 +757,12 @@ local function controlDrone()
         DisableControlAction(0, 106, true) 
         DisableControlAction(0, 30, true)  
         DisableControlAction(0, 31, true)  
+        DisableControlAction(0, 26, true)  -- C key (look behind)  
 
         local lookX = -GetDisabledControlNormal(0, 1) * Config.MouseSensitivity
         local lookY = GetDisabledControlNormal(0, 2) * Config.MouseSensitivity
         local zoomFactor = (currentFOV - Config.MinFOV) / (Config.MaxFOV - Config.MinFOV)
-        local adjustedRotSpeed = Config.RotationZoomScaling and Config.RotationSpeed * (zoomFactor ^ 1.1) or Config.RotationSpeed
+        local adjustedRotSpeed = Config.RotationZoomScaling and Config.RotationSpeed * (zoomFactor ^ 1.05) or Config.RotationSpeed
 
         camRot = vector3(
             math.max(-80.0, math.min(80.0, camRot.x - lookY * adjustedRotSpeed * 0.016)),
@@ -811,6 +791,24 @@ local function controlDrone()
         local vy = (math.sin(heading) * moveF + math.cos(heading) * moveS) * Config.DroneSpeed * speedMultiplier
         SetEntityVelocity(droneEntity, vx, vy, moveV * Config.DroneSpeed * speedMultiplier)
         SetEntityHeading(droneEntity, (camRot.z + 90.0 + 360) % 360)
+        
+        -- Sync minimap to follow drone position with optional rotation tracking
+        if not Config.HUD.hideRadar and Config.MapMarker.enabled and droneBlip then
+            local droneCoords = GetEntityCoords(droneEntity)
+            local droneHeading = GetEntityHeading(droneEntity)
+            
+            -- Continuously update position to follow the drone
+            LockMinimapPosition(droneCoords.x, droneCoords.y)
+            
+            -- Check if we should track rotation or lock to north
+            if Config.MapMarker.trackRotation then
+                -- Rotate minimap to match drone heading
+                SetGameplayCamRelativeHeading(droneHeading)
+            else
+                -- Lock minimap to face north (0 degrees)
+                SetGameplayCamRelativeHeading(0.0)
+            end
+        end
 
         local offset = GetOffsetFromEntityInWorldCoords(droneEntity, Config.CameraOffset.x, Config.CameraOffset.y, Config.CameraOffset.z)
         SetCamCoord(droneCamera, offset.x, offset.y, offset.z)
@@ -875,19 +873,16 @@ local function controlDrone()
     SetSeethrough(false)
     visionMode = 0
     restoreOriginalHudState()
+    UnlockMinimapPosition() -- Reset minimap to follow player
+    SetGameplayCamRelativeHeading(0.0) -- Reset minimap rotation to default
+    minimapLocked = false
     DisplayRadar(true)
     DisplayHud(true)
     for i = 0, 337 do EnableControlAction(0, i, true) end
     stopAnimation()
 
-    if activeTimecycleModifier then
-        ClearTimecycleModifier()
-        SetTimecycleModifierStrength(0)
-        activeTimecycleModifier = nil
-    end
     isLowBattery = false
     isCriticalBattery = false
-    connectionQuality = 1.0
 
     if soundTimer then soundTimer = 0 end
     controllingDrone = false
@@ -996,6 +991,9 @@ AddEventHandler('onResourceStop', function(resourceName)
         stopAnimation()
         deleteProp()
         restoreOriginalHudState() 
+        UnlockMinimapPosition() -- Reset minimap to follow player
+        SetGameplayCamRelativeHeading(0.0) -- Reset minimap rotation to default
+        minimapLocked = false
         DisplayRadar(true)
         DisplayHud(true)
     end
@@ -1008,57 +1006,26 @@ RegisterNUICallback("hideOverlay", function(data, cb)
     cb("ok")
 end)
 
--- Hypothetical NUI callback for flash messages (you'll need to implement the NUI side)
 RegisterNUICallback("flashMessageComplete", function(data, cb)
-    -- This could be used if NUI signals back after a flash, but often not needed
+
     cb("ok")
 end)
 
-RegisterCommand("drone_test_noise", function()
-    if controllingDrone then
-        isNoiseTestActive = not isNoiseTestActive
-        if isNoiseTestActive then
-            TriggerEvent('chat:addMessage', {
-                color = { 255, 0, 0 },
-                args = { "[Drone]", "Noise test ACTIVATED." }
-            })
-        else
-            TriggerEvent('chat:addMessage', {
-                color = { 0, 255, 0 },
-                args = { "[Drone]", "Noise test DEACTIVATED." }
-            })
-        end
-    else
-        TriggerEvent('chat:addMessage', {
-            color = { 255, 165, 0 },
-            args = { "[Drone]", "You must be controlling a drone to use this command." }
-        })
-    end
-end, false)
-
 RegisterNetEvent("drone:playDestructionEffect")
 AddEventHandler("drone:playDestructionEffect", function(netId, coords, ownerPlayerId)
-    -- Stop any ongoing drone sounds for this netId first
     if currentSoundId ~= -1 then
         stopDroneSound()
     end
     
-    -- Play destruction effect at the specified coordinates for all players
     if coords then
-        -- Add particle effects (sparks, explosion, etc.)
-        RequestNamedPtfxAsset("core")
-        while not HasNamedPtfxAssetLoaded("core") do
+        RequestNamedPtfxAsset(Config.DestructionEffect.asset)
+        while not HasNamedPtfxAssetLoaded(Config.DestructionEffect.asset) do
             Wait(1)
         end
+
+        UseParticleFxAssetNextCall(Config.DestructionEffect.asset)
+        StartParticleFxNonLoopedAtCoord(Config.DestructionEffect.name, coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 1.0, false, false, false)
+        PlaySoundFromCoord(-1, Config.DestructionSound.name, coords.x, coords.y, coords.z, Config.DestructionSound.set, false, 50.0, false)
         
-        -- Play spark effect
-        UseParticleFxAssetNextCall("core")
-        StartParticleFxNonLoopedAtCoord("ent_sht_electrical_box", coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 1.0, false, false, false)
-        
-        -- Optional: Add explosion effect
-        -- AddExplosion(coords.x, coords.y, coords.z, 1, 0.5, true, false, 0.2, false)
-        
-        -- Optional: Play destruction sound
-        PlaySoundFromCoord(-1, "DRONE_DESTROYED", coords.x, coords.y, coords.z, Config.Sound.Set or "", false, 50.0, false)
     end
 end)
