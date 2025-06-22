@@ -227,9 +227,71 @@
             height: 100%;
             image-rendering: pixelated;
         }
+
+        #startupScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 1);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            z-index: 2000;
+        }
+
+        .startup-logo {
+            max-width: 20vmin;
+            max-height: 20vmin;
+            object-fit: contain;
+            margin-bottom: 4vmin;
+            /* Removed pulsing animation */
+        }
+
+        .loading-container {
+            width: 30vmin;
+            text-align: center;
+        }
+
+        .loading-text {
+            color: #fff;
+            font-size: 1.8vmin;
+            margin-bottom: 1.5vmin;
+            font-weight: bold;
+            text-shadow: 0 0 1vmin #000;
+        }
+
+        .loading-bar-container {
+            width: 100%;
+            height: 0.8vmin;
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 0.4vmin;
+            overflow: hidden;
+        }
+
+        .loading-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #ffffff, #dddddd);
+            border-radius: 0.4vmin;
+            transition: width 0.1s ease;
+            box-shadow: 0 0 1vmin #ffffff;
+        }
     </style>
 </head>
 <body>
+    <div id="startupScreen">
+        <img id="startupLogo" class="startup-logo" src="">
+        <div class="loading-container">
+            <div class="loading-text">INITIALIZING DRONE SYSTEM</div>
+            <div class="loading-bar-container">
+                <div id="loadingBar" class="loading-bar"></div>
+            </div>
+        </div>
+    </div>
+
     <div id="staticOverlay" class="static-overlay">
         <canvas id="staticCanvas"></canvas>
     </div>
@@ -295,6 +357,8 @@
         </div>
     </div>
 
+
+
     <script>
         const canvas = document.getElementById('staticCanvas');
         const ctx = canvas.getContext('2d');
@@ -352,6 +416,68 @@
         window.addEventListener('resize', updateCanvasSize);
         updateCanvasSize();
 
+        // Startup screen functionality
+        let startupInterval;
+        let connectionLostTimeout;
+        let batteryEmptyTimeout;
+        const startupScreen = document.getElementById('startupScreen');
+        const startupLogo = document.getElementById('startupLogo');
+        const loadingBar = document.getElementById('loadingBar');
+
+        function showStartupScreen(logoUrl, duration, droneStartPercent = 80) {
+            console.log('[NUI] Showing startup screen with logo:', logoUrl, 'duration:', duration, 'drone start %:', droneStartPercent);
+            
+            // Set logo
+            if (logoUrl && logoUrl !== "") {
+                startupLogo.src = logoUrl;
+                startupLogo.style.display = 'block';
+            } else {
+                startupLogo.style.display = 'none';
+            }
+
+            // Show startup screen
+            startupScreen.style.display = 'flex';
+            
+            // Reset loading bar
+            loadingBar.style.width = '0%';
+            
+            // Animate loading bar
+            let progress = 0;
+            const updateInterval = 50; // Update every 50ms
+            const totalSteps = duration / updateInterval;
+            let droneStarted = false;
+            
+            startupInterval = setInterval(() => {
+                progress += 100 / totalSteps;
+                
+                // Start drone and animation at the specified percentage
+                if (progress >= droneStartPercent && !droneStarted) {
+                    droneStarted = true;
+                    console.log('[NUI] Starting drone early at', droneStartPercent, '% completion');
+                    // Signal is handled via the startup screen completion timing in Lua
+                }
+                
+                if (progress >= 100) {
+                    progress = 100;
+                    clearInterval(startupInterval);
+                    
+                    // Hide startup screen after completion
+                    setTimeout(() => {
+                        startupScreen.style.display = 'none';
+                    }, 200);
+                }
+                loadingBar.style.width = progress + '%';
+            }, updateInterval);
+        }
+
+        function hideStartupScreen() {
+            console.log('[NUI] Hiding startup screen');
+            if (startupInterval) {
+                clearInterval(startupInterval);
+            }
+            startupScreen.style.display = 'none';
+        }
+
         let playerInfo = {
             name: "Unknown",
             rank: "Officer",
@@ -378,6 +504,7 @@
         const batteryFill = document.getElementById('batteryFill');
 
         var date;
+        let clockInterval = null;
 
         function updateTime() {
             date = new Date();
@@ -397,6 +524,30 @@
             $("#bodycamTz").html(date.toLocaleTimeString('en', {timeZoneName:'short'}).split(' ')[2] || "LT");
         }
 
+        function startClockUpdates() {
+            if (clockInterval) {
+                clearInterval(clockInterval);
+            }
+            // Update immediately
+            updateTime();
+            // Then update every second
+            clockInterval = setInterval(updateTime, 1000);
+        }
+
+        function stopClockUpdates() {
+            if (clockInterval) {
+                clearInterval(clockInterval);
+                clockInterval = null;
+            }
+        }
+
+        function updateText(elementId, text) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.innerHTML = text;
+            }
+        }
+
         function updatePlayerDisplay() {
             // Only show rank if it's not empty, otherwise just show the name
             const displayName = playerInfo.rank && playerInfo.rank.trim() !== '' 
@@ -406,8 +557,8 @@
             if(playerBodycamAgencyEl) playerBodycamAgencyEl.innerHTML = playerInfo.job || '';
         }
 
-        function updateSignal(strength) { // strength 0-100
-            const activeBars = Math.ceil(strength / 25);
+        function updateSignal(strength, isJammed) { // strength 0-100
+            const activeBars = isJammed ? 1 : Math.ceil(strength / 25);
             for (let i = 0; i < signalBars.length; i++) {
                 signalBars[i].classList.toggle('active', i < activeBars);
             }
@@ -428,7 +579,12 @@
         // Listen for NUI messages from the client script
         window.addEventListener('message', function(event) {
             var item = event.data;
+            
+            // Debug: Log all received messages
+            console.log('[NUI] Received message:', item);
+            
             if (item.type === "update") {
+                console.log('[NUI] Processing update message');
                 // Update basic info
                 updateText("playerBodycamName", item.name);
                 updateText("playerBodycamAgency", item.job.displayName);
@@ -447,18 +603,29 @@
                 // Update time
                 updateTime(item.time);
             } else if (item.action === "showOverlay") {
+                console.log('[NUI] Processing showOverlay message');
                 playerInfo.agency = item.agencyName || playerInfo.agency;
                 if (item.logoUrl && item.logoUrl !== "") {
+                    console.log('[NUI] Setting logo URL:', item.logoUrl);
                     bodycamLogoEl.src = item.logoUrl;
                     bodycamLogoEl.style.display = 'block';
                 } else {
+                    console.log('[NUI] No logo URL provided, hiding logo');
                     bodycamLogoEl.style.display = 'none';
                 }
+                console.log('[NUI] Showing bodycam overlay');
                 bodycamOverlay.style.display = 'flex';
                 updateTime();
                 updatePlayerDisplay();
+                
+                // Start clock updates when overlay is shown
+                startClockUpdates();
             } else if (item.action === "hideOverlay") {
+                console.log('[NUI] Processing hideOverlay message');
                 bodycamOverlay.style.display = 'none';
+                
+                // Stop clock updates when overlay is hidden
+                stopClockUpdates();
                 
                 const batteryEmptyEl = document.getElementById('batteryEmptyOverlay');
                 if (batteryEmptyEl) {
@@ -469,13 +636,16 @@
                     connLostEl.style.display = 'none';
                 }
             } else if (item.action === "updatePlayerData") {
+                console.log('[NUI] Processing updatePlayerData message');
                 playerInfo.name = item.data.name || "Unknown";
                 playerInfo.rank = item.data.rank || "";
                 playerInfo.job = item.data.job || "";
                 playerInfo.agency = item.data.job || "Drone Cam";
+                console.log('[NUI] Updated player info:', playerInfo);
                 updatePlayerDisplay();
                 updateTime();
             } else if (item.action === "updateHUD") {
+                console.log('[NUI] Processing updateHUD message');
                 let shouldShowHud = (item.showBattery || item.showSignal);
                 const hudContainer = document.querySelector('.hud-container');
                 if (hudContainer) hudContainer.style.display = shouldShowHud ? 'flex' : 'none';
@@ -484,8 +654,9 @@
                     signalContainer.style.display = 'flex';
                     // Use signal quality calculated in Lua (0-100%)
                     const signalQuality = item.signal || 100;
+                    const isJammed = item.isJammed || false;
                     
-                    updateSignal(signalQuality);
+                    updateSignal(signalQuality, isJammed);
                 } else {
                     signalContainer.style.display = 'none';
                 }
@@ -514,21 +685,55 @@
                     }
                 }
             } else if (item.action === "showBatteryEmpty") {
+                console.log('[NUI] Processing showBatteryEmpty message');
                 stopStatic();
                 bodycamOverlay.style.display = 'none';
 
                 const batteryEmptyEl = document.getElementById('batteryEmptyOverlay');
                 if (batteryEmptyEl) {
                     batteryEmptyEl.style.display = 'flex';
+                    
+                    // Clear any existing timeout
+                    if (batteryEmptyTimeout) {
+                        clearTimeout(batteryEmptyTimeout);
+                    }
+                    
+                    // Auto-hide after set duration (configurable)
+                    const displayDuration = item.duration || 5000;
+                    batteryEmptyTimeout = setTimeout(() => {
+                        console.log('[NUI] Auto-hiding battery empty overlay after timeout');
+                        batteryEmptyEl.style.display = 'none';
+                    }, displayDuration);
                 }
             } else if (item.action === "showConnectionLost") {
+                console.log('[NUI] Processing showConnectionLost message');
                 stopStatic();
                 bodycamOverlay.style.display = 'none';
 
                 const connLostEl = document.getElementById('connectionLostOverlay');
                 if (connLostEl) {
                     connLostEl.style.display = 'flex';
+                    
+                    // Clear any existing timeout
+                    if (connectionLostTimeout) {
+                        clearTimeout(connectionLostTimeout);
+                    }
+                    
+                    // Auto-hide after 5 seconds (configurable)
+                    const displayDuration = item.duration || 5000;
+                    connectionLostTimeout = setTimeout(() => {
+                        console.log('[NUI] Auto-hiding connection lost overlay after timeout');
+                        connLostEl.style.display = 'none';
+                    }, displayDuration);
                 }
+            } else if (item.action === "showStartupScreen") {
+                console.log('[NUI] Processing showStartupScreen message');
+                showStartupScreen(item.logoUrl, item.duration || 3000, item.droneStartPercent || 80);
+            } else if (item.action === "hideStartupScreen") {
+                console.log('[NUI] Processing hideStartupScreen message');
+                hideStartupScreen();
+            } else {
+                console.log('[NUI] Unknown action received:', item.action);
             }
         });
     </script>

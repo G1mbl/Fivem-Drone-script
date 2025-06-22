@@ -23,18 +23,7 @@ local allDrones = {}
 local playerJob = "unemployed"
 local originalHudState = {}
 
--- NEW: State variables for battery and distance limiters
-local batteryStartTime = 0
-local currentBatteryPercentage = 1.0
-local isLowBattery = false
-local isCriticalBattery = false
-local isNoiseTestActive = false
-local playNoiseSound, stopNoiseSound -- Forward declaration
-
-local currentDistanceToStart = 0.0
-local calculatedSignalQuality = 100.0 -- Signal bars percentage (0-100)
-local calculatedNoiseIntensity = 0.0 -- Noise overlay intensity (0.0-1.0)
-
+-- Missing drone control variables
 local droneEntity, droneCamera = nil, nil
 local controllingDrone = false
 local currentFOV = Config.MaxFOV
@@ -50,6 +39,32 @@ local playerData = {
     grade = "nil"
 }
 
+-- NEW: State variables for battery and distance limiters
+local batteryStartTime = 0
+local currentBatteryPercentage = 1.0
+local isLowBattery = false
+local isCriticalBattery = false
+local isNoiseTestActive = false
+local playNoiseSound, stopNoiseSound -- Forward declaration
+
+local currentDistanceToStart = 0.0
+local keepOverlayVisible = false -- Track if overlay should stay visible after drone ends
+local calculatedSignalQuality = 100.0 -- Signal bars percentage (0-100)
+local calculatedNoiseIntensity = 0.0 -- Noise overlay intensity (0.0-1.0)
+
+-- NEW: Jammer integration variables
+local jammerSignalLoss = 0.0 -- Signal loss from jammers (0.0-1.0)
+local jammerNoiseIntensity = 0.0 -- Noise intensity from jammers (0.0-1.0)
+local inNogoZone = false -- Whether drone is in a no-go zone
+local nearestJammerDistance = math.huge -- Distance to nearest affecting jammer
+local lastJammerDebugTime = 0 -- For debug timing
+local lastSignalDebugTime = 0 -- For signal calculation debug timing
+local lastNUIDebugTime = 0 -- For NUI message debug timing
+local inNoGoZoneLastFrame = false -- To track entering no-go zones
+
+-- ================================================================
+-- BATTERY STATE MANAGEMENT
+-- ================================================================
 local function resetBatteryState()
     if Config.RuntimeLimiter.enabled then
         batteryStartTime = GetGameTimer()
@@ -60,11 +75,373 @@ local function resetBatteryState()
     end
 end
 
+-- ================================================================
+-- JAMMER INTEGRATION FUNCTIONS
+-- ================================================================
+
+-- Fetch all jammers with verification and debug output
+local function getAllJammersWithVerification()
+    local jammers = nil
+    local success, result = pcall(function()
+        return exports['jammer']:GetAllJammers()
+    end)
+    
+    if success then
+        jammers = result
+        if Config.Debug and Config.Debug.enabled then
+            local count = 0
+            for _ in pairs(jammers or {}) do count = count + 1 end
+            print('[Drone] Successfully retrieved ' .. count .. ' jammers from jammer export')
+        end
+    else
+        if Config.Debug and Config.Debug.enabled then
+            print('[Drone] ERROR: Failed to get jammers from export: ' .. tostring(result))
+        end
+        jammers = {}
+    end
+    
+    return jammers or {}
+end
+
+local function getAllJammers()
+    return getAllJammersWithVerification()
+end
+
+-- Check if player owns a specific jammer
+local function isPlayerJammerOwner(jammer)
+    if not Config.JammerIntegration.excludeOwnerJammers then
+        return false
+    end
+    
+    -- Get player identifier (similar to jammer script logic)
+    local playerIdentifier = nil
+    if Config.Framework == "qb" and QBCore then
+        local PlayerData = QBCore.Functions.GetPlayerData()
+        playerIdentifier = PlayerData.citizenid
+    elseif Config.Framework == "esx" and ESX then
+        local PlayerData = ESX.GetPlayerData()
+        playerIdentifier = PlayerData.identifier
+    else
+        playerIdentifier = tostring(GetPlayerServerId(PlayerId()))
+    end
+    
+    return jammer.owner == playerIdentifier
+end
+
+-- Get player job function (moved here to be available before calculateJammerEffects)
+local function getPlayerJob()
+    local jobName = "" -- Default
+    local sourceOfJob = "initial_default"
+
+    if Config.Framework == "esx" then
+        if ESX then
+            local esxData = ESX.GetPlayerData()
+            if esxData and esxData.job and esxData.job.name and esxData.job.name ~= "" and esxData.job.name ~= "unemployed" then
+                jobName = esxData.job.name
+                sourceOfJob = "esx_direct"
+            end
+        end
+    elseif Config.Framework == "qb" then
+        if QBCore then
+            local qbData = QBCore.Functions.GetPlayerData()
+            if qbData and qbData.job and qbData.job.name and qbData.job.name ~= "" and qbData.job.name ~= "unemployed" then
+                jobName = qbData.job.name
+                sourceOfJob = "qb_direct"
+            end
+        end
+    end
+
+    if (jobName == "unemployed" or jobName == "") and playerData and playerData.job and playerData.job ~= "nil" and playerData.job ~= "" and playerData.job ~= "unemployed" then
+        jobName = playerData.job
+        sourceOfJob = "playerData_fallback"
+    end
+    
+    if jobName == "" or jobName == "nil" then
+        jobName = "unemployed"
+        if sourceOfJob ~= "playerData_fallback" then 
+            sourceOfJob = "final_default_due_to_nil_empty"
+        end
+    end
+    return jobName
+end
+
+-- Calculate jammer effects on drone signal and noise
+local function calculateJammerEffects(droneCoords)
+    if not Config.JammerIntegration.enabled or not droneCoords then
+        return 0.0, 0.0, false -- No signal loss, no noise, not in no-go zone
+    end
+    
+    local allJammers = getAllJammers()
+    if not allJammers or next(allJammers) == nil then
+        return 0.0, 0.0, false -- No jammers found
+    end
+    
+    -- Get current player job for job detection
+    local currentPlayerJob = getPlayerJob()
+    
+    local maxSignalLoss = 0.0
+    local maxNoiseIntensity = 0.0
+    local inAnyNogoZone = false
+    local closestDistance = math.huge
+    local jammersProcessed = 0
+    local jammersInRange = 0 -- Initialize to 0 to prevent nil error
+    local debugInfo = {}
+    
+    -- Check each jammer for effects
+    for jammerIdOrIndex, jammer in pairs(allJammers) do
+        if jammer.coords and jammer.range then
+            jammersProcessed = jammersProcessed + 1
+            
+            -- Skip owner's jammers if configured
+            if Config.JammerIntegration.excludeOwnerJammers and isPlayerJammerOwner(jammer) then
+                table.insert(debugInfo, "Jammer " .. tostring(jammerIdOrIndex) .. " skipped (owner)")
+                goto continue
+            end
+            
+            -- NEW: Check if player's job is in the jammer's ignored jobs list
+            if jammer.ignoredJobs and type(jammer.ignoredJobs) == "table" then
+                local isJobIgnored = false
+                for _, ignoredJob in ipairs(jammer.ignoredJobs) do
+                    if string.lower(currentPlayerJob) == string.lower(ignoredJob) then
+                        isJobIgnored = true
+                        break
+                    end
+                end
+                
+                if isJobIgnored then
+                    table.insert(debugInfo, "Jammer " .. tostring(jammerIdOrIndex) .. " (" .. (jammer.label or "Unknown") .. ") skipped - Job ignored: " .. currentPlayerJob)
+                    goto continue
+                end
+            end
+            
+            local jammerCoords = vector3(jammer.coords.x, jammer.coords.y, jammer.coords.z)
+            local distance = #(droneCoords - jammerCoords)
+            local jammerRange = tonumber(jammer.range) or 50.0
+            
+            -- Track closest jammer distance
+            if distance < closestDistance then
+                closestDistance = distance
+            end
+            
+            local jammerDebug = "Jammer " .. tostring(jammerIdOrIndex) .. " dist:" .. string.format("%.1f", distance) .. "m range:" .. jammerRange .. "m"
+            
+            -- Check if within jammer range
+            if distance <= jammerRange then
+                jammersInRange = jammersInRange + 1
+                
+                -- Check no-go zone first (highest priority)
+                local noGoZoneValue = tonumber(jammer.noGoZone) or 0.2 -- Default to 20% if not specified
+                local nogoThreshold
+                
+                if noGoZoneValue >= 1.0 then
+                    -- Absolute radius in meters
+                    nogoThreshold = noGoZoneValue
+                else
+                    -- Percentage of jammer range
+                    nogoThreshold = jammerRange * noGoZoneValue
+                end
+                
+                if Config.JammerIntegration.NogoZone.enabled and distance <= nogoThreshold then
+                    inAnyNogoZone = true
+                    jammerDebug = jammerDebug .. " [NO-GO ZONE at " .. string.format("%.1f", nogoThreshold) .. "m (config: " .. tostring(noGoZoneValue) .. ")]"
+                    table.insert(debugInfo, jammerDebug)
+                    break -- No-go zone overrides everything
+                end
+                
+                -- Calculate signal degradation within jammer range
+                if Config.JammerIntegration.SignalEffect.enabled then
+                    -- Calculate no-go zone boundary
+                    local noGoZoneValue = tonumber(jammer.noGoZone) or 0.2
+                    local nogoThreshold = noGoZoneValue >= 1.0 and noGoZoneValue or (jammerRange * noGoZoneValue)
+                    
+                    -- Signal degradation: minimum 75% loss at jammer edge, maximum at no-go zone
+                    if distance >= nogoThreshold then
+                        -- Distance from no-go zone boundary outward to jammer range
+                        local signalEffectDistance = jammerRange - nogoThreshold
+                        local distanceFromNogoZone = distance - nogoThreshold
+                        
+                        -- Progress from 1.0 (at no-go zone) to 0.75 (at jammer edge for 1 bar)
+                        local signalProgress = 1.0 - (distanceFromNogoZone / signalEffectDistance)
+                        signalProgress = math.max(0, math.min(1, signalProgress))
+                        
+                        -- Apply degradation exponent
+                        local degradationExponent = Config.JammerIntegration.SignalEffect.degradationExponent or 7.5
+                        signalProgress = math.pow(signalProgress, degradationExponent)
+                        
+                        -- Scale between 75% (1 bar remaining at jammer edge) and 90% (max) signal loss
+                        local minSignalLoss = 0.75 -- 1 bar remaining at jammer edge
+                        local maxSignalLoss = Config.JammerIntegration.SignalEffect.maxSignalLoss or 0.9
+                        local signalLoss = minSignalLoss + (signalProgress * (maxSignalLoss - minSignalLoss))
+                        maxSignalLoss = math.max(maxSignalLoss, signalLoss)
+                        
+                        jammerDebug = jammerDebug .. " [SIGNAL LOSS:" .. string.format("%.2f", signalLoss) .. " (1 bar at edge, max at " .. string.format("%.1f", nogoThreshold) .. "m)]"
+                    else
+                        -- Inside no-go zone = maximum signal loss
+                        local signalLoss = Config.JammerIntegration.SignalEffect.maxSignalLoss or 0.9
+                        maxSignalLoss = math.max(maxSignalLoss, signalLoss)
+                        jammerDebug = jammerDebug .. " [SIGNAL LOSS:" .. string.format("%.2f", signalLoss) .. " MAXIMUM (in no-go zone)]"
+                    end
+                end
+                
+                -- Calculate noise effects based on proximity to the no-go zone.
+                -- Noise starts at jammer edge (0%) and reaches maximum at no-go zone boundary (100%)
+                if Config.DistanceLimiter.NoiseEffect.enabled then
+                    local noGoZoneValue = tonumber(jammer.noGoZone) or 0.2
+                    local nogoThreshold = noGoZoneValue >= 1.0 and noGoZoneValue or (jammerRange * noGoZoneValue)
+
+                    -- Ensure nogoThreshold is not greater than the jammer range itself
+                    nogoThreshold = math.min(nogoThreshold, jammerRange)
+
+                    -- The noise effect zone is from jammer edge to no-go zone boundary
+                    local noiseEffectZone = jammerRange - nogoThreshold
+                    
+                    if noiseEffectZone > 0 and distance >= nogoThreshold and distance <= jammerRange then
+                        -- Calculate progress from jammer edge (0) to no-go zone boundary (1)
+                        -- As drone moves closer to no-go zone, noise increases
+                        local distanceFromNoGoZone = distance - nogoThreshold
+                        local noiseProgress = 1.0 - (distanceFromNoGoZone / noiseEffectZone)
+                        noiseProgress = math.max(0, math.min(1, noiseProgress))
+                        
+                        -- Apply degradation exponent from DistanceLimiter for a non-linear ramp-up
+                        local degradationExponent = Config.DistanceLimiter.NoiseEffect.degradationExponent or 7.5
+                        noiseProgress = math.pow(noiseProgress, degradationExponent)
+                        
+                        -- Use max noise intensity from DistanceLimiter
+                        local maxIntensity = Config.DistanceLimiter.NoiseEffect.maxNoiseIntensity or 0.75
+                        local noiseIntensity = noiseProgress * maxIntensity
+                        maxNoiseIntensity = math.max(maxNoiseIntensity, noiseIntensity)
+                        
+                        jammerDebug = jammerDebug .. " [NOISE:" .. string.format("%.2f", noiseIntensity) .. " (Approaching no-go zone at " .. string.format("%.1f", nogoThreshold) .. "m)]"
+                    elseif distance < nogoThreshold then
+                        -- If inside the no-go zone, apply maximum noise
+                        local maxIntensity = Config.DistanceLimiter.NoiseEffect.maxNoiseIntensity or 0.75
+                        maxNoiseIntensity = math.max(maxNoiseIntensity, maxIntensity)
+                        jammerDebug = jammerDebug .. " [NOISE:" .. string.format("%.2f", maxIntensity) .. " MAXIMUM (in no-go zone)]"
+                    end
+                end
+            else
+                jammerDebug = jammerDebug .. " [OUT OF RANGE]"
+            end
+            
+            table.insert(debugInfo, jammerDebug)
+            
+            ::continue::
+        end
+    end
+    
+    -- Update global tracking variables
+    nearestJammerDistance = closestDistance
+    
+    -- Debug output every 5 seconds when controlling drone
+    local currentTime = GetGameTimer()
+    if not lastJammerDebugTime then lastJammerDebugTime = 0 end
+    if controllingDrone and (currentTime - lastJammerDebugTime) > 5000 then
+        local playerId = PlayerId()
+        print('[Drone Player' .. playerId .. '] === JAMMER EFFECTS DEBUG ===')
+        print('[Drone Player' .. playerId .. ']   Current Player Job: ' .. tostring(currentPlayerJob))
+        print('[Drone Player' .. playerId .. ']   Processed: ' .. jammersProcessed .. ' jammers, In Range: ' .. jammersInRange)
+        print('[Drone Player' .. playerId .. ']   Final Signal Loss: ' .. string.format("%.3f", maxSignalLoss) .. ' (0.0-1.0)')
+        print('[Drone Player' .. playerId .. ']   Final Noise: ' .. string.format("%.3f", maxNoiseIntensity) .. ' (0.0-1.0)')
+        print('[Drone Player' .. playerId .. ']   No-Go Zone: ' .. tostring(inAnyNogoZone))
+        print('[Drone Player' .. playerId .. ']   Closest Distance: ' .. (closestDistance == math.huge and "None" or string.format("%.1f", closestDistance) .. 'm'))
+        
+        -- Add range status debug message
+        if jammersInRange > 0 then
+            print('[Drone Player' .. playerId .. ']   >>> DRONE IS IN RANGE OF ' .. jammersInRange .. ' JAMMER(S) <<<')
+        else
+            print('[Drone Player' .. playerId .. ']   Drone is not in range of any jammers')
+        end
+        
+        for _, info in ipairs(debugInfo) do
+            print('[Drone Player' .. playerId .. ']   ' .. info)
+        end
+        print('[Drone Player' .. playerId .. '] === END DEBUG ===')
+        lastJammerDebugTime = currentTime
+    end
+    
+    return maxSignalLoss, maxNoiseIntensity, inAnyNogoZone
+end
+
+-- Check if player can spawn drone at their current location (respects job ignoring)
+local function canPlayerSpawnDroneHere(playerCoords)
+    if not Config.JammerIntegration.enabled then
+        return true -- No jammer integration, always allow
+    end
+    
+    local allJammers = getAllJammers()
+    if not allJammers or next(allJammers) == nil then
+        return true -- No jammers found, always allow
+    end
+    
+    local currentPlayerJob = getPlayerJob()
+    
+    -- Check each jammer for no-go zone violations
+    for jammerIdOrIndex, jammer in pairs(allJammers) do
+        if jammer.coords and jammer.range then
+            -- Skip owner's jammers if configured
+            if Config.JammerIntegration.excludeOwnerJammers and isPlayerJammerOwner(jammer) then
+                goto continue
+            end
+            
+            -- Check if player's job is in the jammer's ignored jobs list
+            if jammer.ignoredJobs and type(jammer.ignoredJobs) == "table" then
+                local isJobIgnored = false
+                for _, ignoredJob in ipairs(jammer.ignoredJobs) do
+                    if string.lower(currentPlayerJob) == string.lower(ignoredJob) then
+                        isJobIgnored = true
+                        break
+                    end
+                end
+                
+                if isJobIgnored then
+                    if Config.Debug and Config.Debug.enabled then
+                        print('[Drone Spawn] Jammer ' .. tostring(jammerIdOrIndex) .. ' (' .. (jammer.label or "Unknown") .. ') ignored for job: ' .. currentPlayerJob)
+                    end
+                    goto continue -- Skip this jammer for this job
+                end
+            end
+            
+            local jammerCoords = vector3(jammer.coords.x, jammer.coords.y, jammer.coords.z)
+            local distance = #(playerCoords - jammerCoords)
+            local jammerRange = tonumber(jammer.range) or 50.0
+            
+            -- Check if within jammer range
+            if distance <= jammerRange then
+                -- Check no-go zone
+                local noGoZoneValue = tonumber(jammer.noGoZone) or 0.2 -- Default to 20% if not specified
+                local nogoThreshold
+                
+                if noGoZoneValue >= 1.0 then
+                    -- Absolute radius in meters
+                    nogoThreshold = noGoZoneValue
+                else
+                    -- Percentage of jammer range
+                    nogoThreshold = jammerRange * noGoZoneValue
+                end
+                
+                if Config.JammerIntegration.NogoZone.enabled and distance <= nogoThreshold then
+                    if Config.Debug and Config.Debug.enabled then
+                        print('[Drone Spawn] Player in no-go zone of jammer ' .. tostring(jammerIdOrIndex) .. ' (' .. (jammer.label or "Unknown") .. ') - job: ' .. currentPlayerJob .. ' - distance: ' .. string.format("%.1f", distance) .. 'm, threshold: ' .. string.format("%.1f", nogoThreshold) .. 'm')
+                    end
+                    return false -- Player is in a no-go zone of a jammer that doesn't ignore their job
+                end
+            end
+            
+            ::continue::
+        end
+    end
+    
+    return true -- No blocking jammers found
+end
+
+-- Initialize framework and audio
 CreateThread(function()
+    -- Set up framework core object
     if Config.Framework == "qb" then
         QBCore = exports['qb-core']:GetCoreObject()
     end
     
+    -- Load custom audio bank
     while not RequestScriptAudioBank('audiodirectory/custom_sounds', false) do 
         Wait(0) 
     end
@@ -154,41 +531,19 @@ local function getPlayerInfo()
     }
 end
 
-
-local function getPlayerJob()
-    local jobName = "" -- Default
-    local sourceOfJob = "initial_default"
-
-    if Config.Framework == "esx" then
-        if ESX then
-            local esxData = ESX.GetPlayerData()
-            if esxData and esxData.job and esxData.job.name and esxData.job.name ~= "" and esxData.job.name ~= "unemployed" then
-                jobName = esxData.job.name
-                sourceOfJob = "esx_direct"
-            end
-        end
-    elseif Config.Framework == "qb" then
-        if QBCore then
-            local qbData = QBCore.Functions.GetPlayerData()
-            if qbData and qbData.job and qbData.job.name and qbData.job.name ~= "" and qbData.job.name ~= "unemployed" then
-                jobName = qbData.job.name
-                sourceOfJob = "qb_direct"
-            end
-        end
+-- ================================================================
+-- NOTIFICATION FUNCTION
+-- ================================================================
+local function ShowNotification(message)
+    if Config.Framework == "esx" and ESX then
+        ESX.ShowNotification(message)
+    elseif Config.Framework == "qb" and QBCore then
+        QBCore.Functions.Notify(message, "primary", 5000)
+    else
+        AddTextEntry('DRONE_NOTIFICATION', message)
+        BeginTextCommandDisplayHelp('DRONE_NOTIFICATION')
+        EndTextCommandDisplayHelp(5000, true, false, -1)
     end
-
-    if (jobName == "unemployed" or jobName == "") and playerData and playerData.job and playerData.job ~= "nil" and playerData.job ~= "" and playerData.job ~= "unemployed" then
-        jobName = playerData.job
-        sourceOfJob = "playerData_fallback"
-    end
-    
-    if jobName == "" or jobName == "nil" then
-        jobName = "unemployed"
-        if sourceOfJob ~= "playerData_fallback" then 
-            sourceOfJob = "final_default_due_to_nil_empty"
-        end
-    end
-    return jobName
 end
 
 CreateThread(function()
@@ -355,6 +710,66 @@ local function updateDroneSounds()
     end
 end
 
+-- NEW: Jammer noise sound management
+local jammerNoiseActive = false
+local jammerNoiseSoundId = -1
+
+local function playJammerNoiseSound()
+    if not Config.JammerIntegration.NoiseSound.enabled or jammerNoiseActive then
+        return
+    end
+    
+    jammerNoiseActive = true
+    jammerNoiseSoundId = GetSoundId()
+    PlaySoundFrontend(jammerNoiseSoundId, "Barrage_Finished", "CARMOD_3_RAM_ENGINE_CHANGE_MASTER", true)
+end
+
+local function stopJammerNoiseSound()
+    if jammerNoiseActive and jammerNoiseSoundId ~= -1 then
+        StopSound(jammerNoiseSoundId)
+        ReleaseSoundId(jammerNoiseSoundId)
+        jammerNoiseSoundId = -1
+        jammerNoiseActive = false
+    end
+end
+
+-- Update jammer noise based on current effects
+local function updateJammerNoise()
+    if not Config.JammerIntegration.enabled or not Config.DistanceLimiter.NoiseSound.enabled then
+        return
+    end
+    
+    if nearestJammerDistance == math.huge then
+        stopJammerNoiseSound()
+        return
+    end
+    
+    -- Check if we should play jammer noise (reuse DistanceLimiter noise settings)
+    local allJammers = getAllJammers()
+    local shouldPlayNoise = false
+    
+    for id, jammer in pairs(allJammers) do
+        if jammer.coords and jammer.jammerRange and not isPlayerJammerOwner(jammer) then
+            local jammerCoords = vector3(jammer.coords.x, jammer.coords.y, jammer.coords.z)
+            local distance = #(GetEntityCoords(droneEntity) - jammerCoords)
+            
+            -- Use the same percentage as the noise effect for consistency
+            local soundStartPercentage = Config.DistanceLimiter.NoiseEffect.noiseStartPercentage
+            local soundStartDistance = jammer.jammerRange * soundStartPercentage
+            
+            if distance <= soundStartDistance then
+                shouldPlayNoise = true
+                break
+            end
+        end
+    end
+    
+    if shouldPlayNoise and not jammerNoiseActive then
+        playJammerNoiseSound()
+    elseif not shouldPlayNoise and jammerNoiseActive then
+        stopJammerNoiseSound()
+    end
+end
 
 RegisterNetEvent("drone:playSound")
 AddEventHandler("drone:playSound", function(netId, soundName, coords, isOwnDrone)
@@ -462,6 +877,11 @@ end
 
 -- Update player data and send to NUI (now includes overlay loading)
 local function updatePlayerData()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone] updatePlayerData called - setting up overlay')
+        print('[Drone] controllingDrone:', controllingDrone)
+    end
+    
     local pInfo = getPlayerInfo() -- Use the consistent function to get player details
     local currentJob = getPlayerJob() 
     local jobConfig = Config.Jobs[currentJob] or Config.Jobs.default
@@ -508,6 +928,11 @@ local function updatePlayerData()
                 nuiData.logoUrl = jobConfig.logoUrl
             end
         end
+        
+        if Config.Debug and Config.Debug.enabled then
+            print('[Drone] Sending showOverlay to NUI:', json.encode(nuiData))
+        end
+        
         SendNUIMessage(nuiData)
     else
         SendNUIMessage({ action = "hideOverlay" }) -- Hide if no valid config
@@ -551,6 +976,8 @@ AddEventHandler("drone:setPlayerData", function(data)
     end
 end)
 
+-- Note: updatePlayerData function is defined above at line 755
+
 function DrawDroneOverlay()
     if droneEntity and DoesEntityExist(droneEntity) then -- Removed heliCamScaleform check for now, assuming it's loaded if drone active
         if not heliCamScaleform or not HasScaleformMovieLoaded(heliCamScaleform) then
@@ -588,6 +1015,24 @@ function DrawDroneOverlay()
             hudData.battery = math.floor(currentBatteryPercentage * 100)
         end
 
+        -- Debug NUI data being sent
+        if Config.Debug and Config.Debug.enabled and controllingDrone then
+            local currentTime = GetGameTimer()
+            if not lastNUIDebugTime then lastNUIDebugTime = 0 end
+            if (currentTime - lastNUIDebugTime) > 3000 then -- Every 3 seconds
+                print('[Drone NUI] Sending HUD Data:')
+                print('  showBattery: ' .. tostring(hudData.showBattery))
+                print('  showSignal: ' .. tostring(hudData.showSignal))
+                print('  signal: ' .. string.format("%.2f", hudData.signal or 0))
+                print('  showNoise: ' .. tostring(hudData.showNoise))
+                print('  noiseLevel: ' .. string.format("%.3f", hudData.noiseLevel or 0))
+                if hudData.battery then
+                    print('  battery: ' .. hudData.battery .. '%')
+                end
+                lastNUIDebugTime = currentTime
+            end
+        end
+
         SendNUIMessage(hudData)
     end
 end
@@ -601,8 +1046,14 @@ local function controlDrone()
     TriggerServerEvent("drone:sendPlayerData") -- Request data from server
 
     saveOriginalHudState()
-    -- loadOverlay() -- This will be called by setPlayerData
-    -- updatePlayerData() -- This will be called by setPlayerData
+    -- Ensure overlay shows immediately, even if server event fails
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone] About to call updatePlayerData() to trigger bodycam overlay...')
+    end
+    updatePlayerData()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone] updatePlayerData() called successfully')
+    end
 
     SetEntityVisible(ped, true, true)
     FreezeEntityPosition(ped, false)
@@ -723,21 +1174,78 @@ local function controlDrone()
             end
         end
 
-        if destructionReason then
-            controllingDrone = false 
-            if destructionReason == "battery_empty" then
-                stopDroneSound()
-                SendNUIMessage({ action = "showBatteryEmpty" })
-                Wait(3000) -- Show the empty battery screen for 3 seconds
-            elseif destructionReason == "out_of_range" then
-                stopDroneSound()
-                SendNUIMessage({ action = "showConnectionLost" })
-                Wait(3000) -- Show the connection lost screen for 3 seconds
+        -- Apply jammer effects (calculate before checking destruction)
+        jammerSignalLoss, jammerNoiseIntensity, inNogoZone = calculateJammerEffects(currentDroneCoords)
+
+        -- Handle entering a no-go zone
+        if inNogoZone and not inNoGoZoneLastFrame then
+            if Config.JammerIntegration.NogoZone.enabled and Config.JammerIntegration.NogoZone.notification then
+                ShowNotification(Config.JammerIntegration.NogoZone.notification)
             end
+        end
+        inNoGoZoneLastFrame = inNogoZone -- Update for next frame
 
+        -- Check for no-go zone violation first (highest priority)
+        if inNogoZone then
+            destructionReason = "out_of_range" -- Use connection lost overlay instead of no-go zone
+        else
+            -- Apply jammer effects to signal and noise
+            if jammerSignalLoss > 0 then
+                -- Convert signal loss (0.0-1.0) to percentage reduction
+                local signalReduction = jammerSignalLoss * 100
+                local originalSignalQuality = calculatedSignalQuality
+                calculatedSignalQuality = math.max(0, calculatedSignalQuality - signalReduction)
+                
+                if shouldDebugSignal then
+                    print('  Signal Reduction Applied: ' .. string.format("%.2f", signalReduction) .. '%')
+                    print('  Signal Quality: ' .. string.format("%.2f", originalSignalQuality) .. '% -> ' .. string.format("%.2f", calculatedSignalQuality) .. '%')
+                end
+            end
+            
+            if jammerNoiseIntensity > 0 then
+                -- Use the stronger noise source (jammer noise takes priority as it's the main interference)
+                local originalNoiseIntensity = calculatedNoiseIntensity
+                calculatedNoiseIntensity = math.max(calculatedNoiseIntensity, jammerNoiseIntensity)
+                
+                if shouldDebugSignal then
+                    print('  Noise Intensity: ' .. string.format("%.3f", originalNoiseIntensity) .. ' -> ' .. string.format("%.3f", calculatedNoiseIntensity))
+                    print('  Jammer Noise Priority: ' .. string.format("%.3f", jammerNoiseIntensity))
+                end
+            end
+            
+            if shouldDebugSignal then
+                print('  Final Signal Quality: ' .. string.format("%.2f", calculatedSignalQuality) .. '%')
+                print('  Final Noise Intensity: ' .. string.format("%.3f", calculatedNoiseIntensity))
+                print('[Drone Signal] === END DEBUG ===')
+            end
+        end
+
+        if destructionReason then
+            keepOverlayVisible = true -- Keep overlay visible for destruction
+            controllingDrone = false 
+            
+            -- Handle destruction and cleanup immediately
+            stopDroneSound()
             destroyDrone(droneEntity)
-
             droneEntity = nil 
+            
+            -- Show overlay in a separate thread after cleanup is complete
+            CreateThread(function()
+                if destructionReason == "battery_empty" then
+                    SendNUIMessage({ 
+                        action = "showBatteryEmpty",
+                        duration = Config.Overlays and Config.Overlays.batteryEmptyDuration or 5000
+                    })
+                    Wait(3000) -- Show the empty battery screen for 3 seconds
+                elseif destructionReason == "out_of_range" then
+                    SendNUIMessage({ 
+                        action = "showConnectionLost",
+                        duration = Config.Overlays and Config.Overlays.connectionLostDuration or 5000
+                    })
+                    Wait(3000) -- Show the connection lost screen for 3 seconds
+                end
+            end)
+            
             break 
         end
 
@@ -749,6 +1257,9 @@ local function controlDrone()
 
             soundTimer = GetGameTimer()
         end
+        
+        -- Update jammer noise effects
+        updateJammerNoise()
         
         DisableControlAction(0, 24, true)  
         DisableControlAction(0, 25, true)  
@@ -845,6 +1356,7 @@ local function controlDrone()
         end
 
         if IsControlJustPressed(0, Config.Keys.Exit) then
+            TriggerServerEvent('drone:server:giveItemBack') -- Give the drone item back
             destroyDrone(droneEntity)
             droneEntity = nil 
             controllingDrone = false
@@ -853,9 +1365,13 @@ local function controlDrone()
     end 
 
     stopDroneSound()
+    stopJammerNoiseSound() -- Stop jammer noise when exiting drone control
     
     SendNUIMessage({ action = "updateHUD", showBattery = false, showSignal = false })
-    hideOverlay()
+    if not keepOverlayVisible then
+        hideOverlay() -- Only hide overlay if it shouldn't stay visible
+    end
+    keepOverlayVisible = false -- Reset for next time
     SetNuiFocus(false, false)
 
     RenderScriptCams(false, false, 0, true, false)
@@ -898,6 +1414,9 @@ function destroyDrone(entity)
 
         DeleteEntity(entity)
     end
+    
+    -- Stop any jammer noise when drone is destroyed
+    stopJammerNoiseSound()
 end
 
 local function spawnDroneAndControl()
@@ -911,10 +1430,93 @@ local function spawnDroneAndControl()
         return false
     end
 
+    -- Check if player can spawn drone at their current location (respects job exceptions)
+    local playerCoords = GetEntityCoords(ped)
+    local canSpawn = canPlayerSpawnDroneHere(playerCoords)
+    
+    if not canSpawn then
+        if Config.Debug and Config.Debug.enabled then
+            print('[Drone Player' .. PlayerId() .. '] Cannot spawn drone - player is in a no-go zone (job not ignored)')
+        end
+        
+        -- Show notification to player
+        if Config.JammerIntegration.NogoZone.notification then
+            ShowNotification(Config.JammerIntegration.NogoZone.notification)
+        else
+            ShowNotification("Cannot deploy drone - signal interference too strong!")
+        end
+        
+        return false
+    end
+
+    -- Show startup screen if enabled
+    local droneStarted = false
+    if Config.StartupScreen.enabled then
+        local logoUrl = Config.StartupScreen.logoUrl
+        if logoUrl and logoUrl ~= "" then
+            -- Convert local logo URL if needed
+            if not string.find(logoUrl, "^https?://") and not string.find(logoUrl, "^nui://") then
+                local resourceName = GetCurrentResourceName()
+                local sanitizedPath = logoUrl:gsub("^/", "")
+                logoUrl = ("https://cfx-nui-%s/nui/%s"):format(resourceName, sanitizedPath)
+            end
+        end
+        
+        SendNUIMessage({
+            action = "showStartupScreen",
+            logoUrl = logoUrl,
+            duration = Config.StartupScreen.duration or 3000,
+            droneStartPercent = Config.StartupScreen.droneStartPercent or 80
+        })
+        
+        -- Play startup sound if enabled
+        if Config.StartupScreen.playSound and Config.StartupScreen.soundName then
+            PlaySoundFrontend(-1, Config.StartupScreen.soundName, Config.StartupScreen.soundSet or "special_soundset", true)
+        end
+        
+        -- Disable player controls during startup screen
+        local startupDuration = Config.StartupScreen.duration or 3000
+        local startTime = GetGameTimer()
+        
+        -- Create a thread to disable controls during startup
+        CreateThread(function()
+            while (GetGameTimer() - startTime) < startupDuration do
+                Wait(0)
+                -- Disable all player controls during startup
+                DisableAllControlActions(0)
+                DisableAllControlActions(1)
+                DisableAllControlActions(2)
+            end
+        end)
+        
+        -- Calculate when to start drone (before full duration)
+        local droneStartTime = (Config.StartupScreen.duration or 3000) * ((Config.StartupScreen.droneStartPercent or 80) / 100)
+        
+        -- Wait for drone start time, then spawn drone in background
+        Wait(droneStartTime)
+        
+        -- Start requesting the drone model during startup screen
+        RequestModel(Config.DroneModel)
+        droneStarted = true
+        
+        -- Continue waiting for full startup duration
+        local remainingTime = (Config.StartupScreen.duration or 3000) - droneStartTime
+        if remainingTime > 0 then
+            Wait(remainingTime)
+        end
+    end
+
     resetBatteryState() -- Reset battery state before spawning a new drone
 
     local pos = GetEntityCoords(ped)
-    local heading = GetEntityHeading(ped)        RequestModel(Config.DroneModel)
+    local heading = GetEntityHeading(ped)
+    
+    -- Request model if not already started during startup screen
+    if not droneStarted then
+        RequestModel(Config.DroneModel)
+    end
+    
+    -- Wait for model to load
     while not HasModelLoaded(Config.DroneModel) do 
         Wait(50)
     end
@@ -922,7 +1524,10 @@ local function spawnDroneAndControl()
     if not HasModelLoaded(Config.DroneModel) then
         return false
     end
-      droneEntity = CreateObject(Config.DroneModel, pos.x, pos.y, pos.z + 1.0, true, true, true)    if not droneEntity or not DoesEntityExist(droneEntity) then
+
+    droneEntity = CreateObject(Config.DroneModel, pos.x, pos.y, pos.z + 1.0, true, true, true)
+    
+    if not droneEntity or not DoesEntityExist(droneEntity) then
         SetModelAsNoLongerNeeded(Config.DroneModel)
         return false
     end
@@ -948,7 +1553,11 @@ local function spawnDroneAndControl()
     return true
 end
 
+
 RegisterNetEvent("drone:useItem", function()
+    -- The spawnDroneAndControl function already contains the correct logic 
+    -- to check for no-go zones while respecting ignored jobs. 
+    -- The previous check here was redundant and incorrect.
     spawnDroneAndControl()
 end)
 
@@ -1000,32 +1609,395 @@ AddEventHandler('onResourceStop', function(resourceName)
     controllingDrone = false
 end)
 
--- NUI Callbacks
-RegisterNUICallback("hideOverlay", function(data, cb)
-    SetNuiFocus(false, false)
-    cb("ok")
-end)
+-- ================================================================
+-- JAMMER DATA VERIFICATION AND DEBUGGING
+-- ================================================================
 
-RegisterNUICallback("flashMessageComplete", function(data, cb)
-
-    cb("ok")
-end)
-
-RegisterNetEvent("drone:playDestructionEffect")
-AddEventHandler("drone:playDestructionEffect", function(netId, coords, ownerPlayerId)
-    if currentSoundId ~= -1 then
-        stopDroneSound()
+-- Verify jammer data integrity
+local function verifyJammerData(jammers)
+    if not jammers then
+        print('[Drone] ERROR: Received nil jammer data')
+        return false, "Nil data"
     end
     
-    if coords then
-        RequestNamedPtfxAsset(Config.DestructionEffect.asset)
-        while not HasNamedPtfxAssetLoaded(Config.DestructionEffect.asset) do
-            Wait(1)
-        end
-
-        UseParticleFxAssetNextCall(Config.DestructionEffect.asset)
-        StartParticleFxNonLoopedAtCoord(Config.DestructionEffect.name, coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 1.0, false, false, false)
-        PlaySoundFromCoord(-1, Config.DestructionSound.name, coords.x, coords.y, coords.z, Config.DestructionSound.set, false, 50.0, false)
-        
+    if type(jammers) ~= 'table' then
+        print('[Drone] ERROR: Received invalid jammer data type: ' .. type(jammers))
+        return false, "Invalid type"
     end
+    
+    local validJammers = 0
+    local invalidJammers = 0
+    
+    for id, jammer in pairs(jammers) do
+        if type(jammer) == 'table' and jammer.coords and jammer.range then
+            -- Enhanced validation
+            local coordsValid = (type(jammer.coords) == "table" and 
+                                jammer.coords.x and jammer.coords.y and jammer.coords.z and
+                                type(jammer.coords.x) == "number" and 
+                                type(jammer.coords.y) == "number" and 
+                                type(jammer.coords.z) == "number")
+            
+            local rangeValid = (type(jammer.range) == "number" and jammer.range > 0)
+            
+            if coordsValid and rangeValid then
+                validJammers = validJammers + 1
+                print('[Drone] VALID Jammer ' .. tostring(id) .. 
+                      ' - coords: (' .. jammer.coords.x .. ', ' .. jammer.coords.y .. ', ' .. jammer.coords.z .. ')' ..
+                      ' - range: ' .. jammer.range .. 
+                      ' - owner: ' .. tostring(jammer.owner) ..
+                      ' - permanent: ' .. tostring(jammer.permanent))
+            else
+                invalidJammers = invalidJammers + 1
+                print('[Drone] INVALID Jammer ' .. tostring(id) .. ' - coordsValid: ' .. tostring(coordsValid) .. ', rangeValid: ' .. tostring(rangeValid))
+                if not coordsValid then
+                    print('  coords type: ' .. type(jammer.coords) .. ', value: ' .. tostring(jammer.coords))
+                end
+                if not rangeValid then
+                    print('  range type: ' .. type(jammer.range) .. ', value: ' .. tostring(jammer.range))
+                end
+            end
+        else
+            invalidJammers = invalidJammers + 1
+            print('[Drone] WARNING: Invalid jammer data for ID ' .. tostring(id) .. 
+                  ' - type: ' .. type(jammer) .. 
+                  ' - has coords: ' .. tostring(jammer and jammer.coords ~= nil) .. 
+                  ' - has range: ' .. tostring(jammer and jammer.range ~= nil))
+        end
+    end
+    
+    print('[Drone] Jammer data verification: ' .. validJammers .. ' valid, ' .. invalidJammers .. ' invalid jammers')
+    return true, validJammers .. " valid jammers"
+end
+
+-- Enhanced jammer data retrieval with verification
+local function getAllJammersWithVerification()
+    if GetResourceState('jammer') ~= 'started' then
+        print('[Drone] NOTICE: Jammer resource is not started')
+        return {}
+    end
+    
+    local success, jammers = pcall(function()
+        return exports['jammer']:GetAllJammers()
+    end)
+    
+    if not success then
+        print('[Drone] ERROR: Failed to call jammer export: ' .. tostring(jammers))
+        return {}
+    end
+    
+    if not jammers then
+        print('[Drone] NOTICE: Jammer export returned nil')
+        return {}
+    end
+    
+    local isValid, info = verifyJammerData(jammers)
+    if isValid then
+        print('[Drone] SUCCESS: Retrieved jammer data - ' .. info)
+        
+        -- Debug: Print first few jammers for verification
+        local count = 0
+        for id, jammer in pairs(jammers) do
+            if count < 3 then -- Only show first 3 for brevity
+                print('[Drone] DEBUG: Jammer ' .. tostring(id) .. 
+                      ' at coords(' .. jammer.coords.x .. ', ' .. jammer.coords.y .. ', ' .. jammer.coords.z .. ')' ..
+                      ' range=' .. tostring(jammer.range) ..
+                      ' owner=' .. tostring(jammer.owner) ..
+                      ' permanent=' .. tostring(jammer.permanent))
+                count = count + 1
+            end
+        end
+    else
+        print('[Drone] ERROR: Invalid jammer data received - ' .. info)
+        return {}
+    end
+    
+    return jammers
+end
+
+-- Get all jammers from the jammer script
+
+-- ================================================================
+-- DEBUG COMMANDS FOR TESTING
+-- ================================================================
+
+RegisterCommand('dronetest', function()
+    print('[Drone Test] ===== COMPREHENSIVE DRONE-JAMMER DEBUG =====')
+    
+    -- Test jammer resource state
+    local jammerResourceState = GetResourceState('jammer')
+    print('[Drone Test] Jammer resource state: ' .. jammerResourceState)
+    
+    local allJammers = getAllJammers()
+    local jammerCount = 0
+    for _ in pairs(allJammers) do jammerCount = jammerCount + 1 end
+    
+    print('[Drone Test] Found ' .. jammerCount .. ' jammers from getAllJammers()')
+    
+    if jammerCount > 0 then
+        print('[Drone Test] Jammer data structure analysis:')
+        local count = 0
+        for id, jammer in pairs(allJammers) do
+            if count < 3 then
+                print('[Drone Test] Jammer ' .. tostring(id) .. ':')
+                print('  coords type: ' .. type(jammer.coords))
+                if type(jammer.coords) == "table" then
+                    print('  coords: (' .. tostring(jammer.coords.x) .. ', ' .. tostring(jammer.coords.y) .. ', ' .. tostring(jammer.coords.z) .. ')')
+                else
+                    print('  coords: ' .. tostring(jammer.coords))
+                end
+                print('  range: ' .. tostring(jammer.range) .. ' (type: ' .. type(jammer.range) .. ')')
+                print('  noGoZone: ' .. tostring(jammer.noGoZone) .. ' (type: ' .. type(jammer.noGoZone) .. ')')
+                print('  owner: ' .. tostring(jammer.owner))
+                print('  permanent: ' .. tostring(jammer.permanent))
+                count = count + 1
+            end
+        end
+    end
+    
+    -- Test jammer effects at player position
+    local playerCoords = GetEntityCoords(PlayerPedId())
+    print('[Drone Test] Testing signal calculations at player position:')
+    print('  Player coords: (' .. string.format("%.1f", playerCoords.x) .. ', ' .. string.format("%.1f", playerCoords.y) .. ', ' .. string.format("%.1f", playerCoords.z) .. ')')
+    
+    -- Get configuration values for debugging
+    print('[Drone Test] Configuration Values:')
+    print('  JammerIntegration.enabled: ' .. tostring(Config.JammerIntegration.enabled))
+    print('  JammerIntegration.excludeOwnerJammers: ' .. tostring(Config.JammerIntegration.excludeOwnerJammers))
+    print('  SignalEffect.enabled: ' .. tostring(Config.JammerIntegration.SignalEffect.enabled))
+    print('  SignalEffect.effectStartPercentage: 0.5 (HARDCODED - 50% of jammer range)')
+    print('  SignalEffect.maxSignalLoss: ' .. tostring(Config.JammerIntegration.SignalEffect.maxSignalLoss))
+    print('  SignalEffect.degradationExponent: ' .. tostring(Config.JammerIntegration.SignalEffect.degradationExponent))
+    print('  NogoZone.enabled: ' .. tostring(Config.JammerIntegration.NogoZone.enabled))
+    print('  NogoZone.threshold: PER-JAMMER (from jammer.noGoZone property)')
+    print('  NoiseEffect.enabled: ' .. tostring(Config.DistanceLimiter.NoiseEffect.enabled))
+    print('  NoiseEffect.effectStartPercentage: 0.5 (HARDCODED - 50% of jammer range)')
+    print('  NoiseEffect.maxNoiseIntensity: ' .. tostring(Config.DistanceLimiter.NoiseEffect.maxNoiseIntensity))
+    
+    -- Test individual jammer calculations
+    local allJammers = getAllJammers()
+    if next(allJammers) then
+        print('[Drone Test] Individual Jammer Analysis:')
+        local count = 0
+        for id, jammer in pairs(allJammers) do
+            if count < 2 and jammer.coords and jammer.range then -- Test first 2 jammers
+                local jammerCoords = vector3(jammer.coords.x, jammer.coords.y, jammer.coords.z)
+                local distance = #(playerCoords - jammerCoords)
+                local range = tonumber(jammer.range) or 50.0
+                
+                -- Calculate the specific thresholds using jammer's no-go zone property
+                local noGoZoneValue = tonumber(jammer.noGoZone) or 0.2 -- Default to 20% if not specified
+                local nogoThreshold
+                
+                if noGoZoneValue >= 1.0 then
+                    -- Absolute radius in meters
+                    nogoThreshold = noGoZoneValue
+                else
+                    -- Percentage of jammer range
+                   
+                    nogoThreshold = range * noGoZoneValue
+                end
+                
+                local effectTriggerDistance = range * 0.5  -- 50% for signal/noise effects
+                
+                print('  Jammer ' .. tostring(id) .. ':')
+                print('    Distance: ' .. string.format("%.2f", distance) .. 'm')
+                print('    Full Range: ' .. range .. 'm')
+                print('    No-go Zone: ≤' .. string.format("%.1f", nogoThreshold) .. 'm (config: ' .. tostring(noGoZoneValue) .. ')')
+                print('    Effects Zone: ≤' .. string.format("%.1f", effectTriggerDistance) .. 'm (50%)')
+
+                
+                if distance <= nogoThreshold then
+                    print('    [NO-GO ZONE] Drone would disconnect!')
+                elseif distance <= effectTriggerDistance then
+                    print('    [EFFECTS ACTIVE] Calculating...')
+                    local effectProgress = (effectTriggerDistance - distance) / (range - distance)
+                    local signalLoss = effectProgress * 0.9  -- max signal loss
+                    local noiseIntensity = effectProgress * 0.75  -- max noise
+                    print('      Effect Progress: ' .. string.format("%.3f", effectProgress))
+                    print('      Signal Loss: ' .. string.format("%.3f", signalLoss))
+                    print('      Noise: ' .. string.format("%.3f", noiseIntensity))
+                else
+                    print('    [NO EFFECTS] Out of range')
+                end
+                count = count + 1
+            end
+        end
+    end
+    
+    local signalLoss, noiseIntensity, inNogoZone = calculateJammerEffects(playerCoords)
+    print('[Drone Test] Final calculated effects at player position:')
+    print('  Signal Loss: ' .. string.format("%.4f", signalLoss) .. ' (0.0-1.0 scale)')
+    print('  Noise Intensity: ' .. string.format("%.4f", noiseIntensity) .. ' (0.0-1.0 scale)')
+    print('  In No-Go Zone: ' .. tostring(inNogoZone))
+    
+    -- Test signal quality conversion
+    local baseSignalQuality = 100.0
+    local signalReduction = signalLoss * 100
+    local finalSignalQuality = math.max(0, baseSignalQuality - signalReduction)
+    print('[Drone Test] Signal Quality Conversion:')
+    print('  Base Signal Quality: ' .. baseSignalQuality .. '%')
+    print('  Signal Reduction: ' .. string.format("%.2f", signalReduction) .. '%')
+    print('  Final Signal Quality: ' .. string.format("%.2f", finalSignalQuality) .. '%')
+    
+    -- Test job detection system
+    print('[Drone Test] Job Detection System Test:')
+    local currentJob = getPlayerJob()
+    print('  Current Player Job: ' .. tostring(currentJob))
+    
+    -- Test spawn capability at current location
+    local canSpawn = canPlayerSpawnDroneHere(playerCoords)
+    print('  Can Spawn Drone Here: ' .. tostring(canSpawn))
+    
+    for id, jammer in pairs(allJammers) do
+        if jammer.coords and jammer.range then
+            local jammerCoords = vector3(jammer.coords.x, jammer.coords.y, jammer.coords.z)
+            local distance = #(playerCoords - jammerCoords)
+            local inRange = distance <= (jammer.range or 50.0)
+            
+            if inRange then
+                local jobIgnored = false
+                if jammer.ignoredJobs and type(jammer.ignoredJobs) == "table" then
+                    for _, ignoredJob in ipairs(jammer.ignoredJobs) do
+                        if string.lower(currentJob) == string.lower(ignoredJob) then
+                            jobIgnored = true
+                            break
+                        end
+                    end
+                end
+                
+                -- Check no-go zone
+                local noGoZoneValue = tonumber(jammer.noGoZone) or 0.2
+                local nogoThreshold = noGoZoneValue >= 1.0 and noGoZoneValue or ((jammer.range or 50.0) * noGoZoneValue)
+                local inNoGoZone = distance <= nogoThreshold
+                
+                print('  Jammer ' .. tostring(id) .. ' (' .. (jammer.label or 'Unknown') .. '):')
+                print('    Distance: ' .. string.format("%.1f", distance) .. 'm, Range: ' .. (jammer.range or 50.0) .. 'm')
+                print('    No-Go Zone Threshold: ' .. string.format("%.1f", nogoThreshold) .. 'm, In No-Go Zone: ' .. tostring(inNoGoZone))
+                print('    Ignored Jobs: ' .. (jammer.ignoredJobs and table.concat(jammer.ignoredJobs, ', ') or 'None'))
+                print('    Job Ignored: ' .. tostring(jobIgnored))
+                if jobIgnored then
+                    print('    >>> JAMMER BYPASSED FOR THIS JOB <<<')
+                elseif inNoGoZone then
+                    print('    >>> BLOCKS DRONE SPAWN <<<')
+                end
+            end
+        end
+    end
+    
+    print('[Drone Test] ===== END DEBUG =====')
 end)
+
+RegisterCommand('dronesignal', function()
+    if not controllingDrone then
+        print('[Drone Signal] Not controlling a drone. Use this command while flying a drone.')
+        return
+    end
+    
+    print('[Drone Signal] === CURRENT SIGNAL STATUS ===')
+    print('  Current Signal Quality: ' .. string.format("%.2f", calculatedSignalQuality) .. '%')
+    print('  Current Noise Intensity: ' .. string.format("%.3f", calculatedNoiseIntensity))
+    print('  Distance to Start: ' .. string.format("%.1f", currentDistanceToStart) .. 'm')
+    print('  Max Distance: ' .. Config.DistanceLimiter.maxDistance .. 'm')
+    print('  Jammer Signal Loss: ' .. string.format("%.3f", jammerSignalLoss))
+    print('  Jammer Noise Intensity: ' .. string.format("%.3f", jammerNoiseIntensity))
+    print('  In No-Go Zone: ' .. tostring(inNogoZone))
+    print('  Battery Percentage: ' .. string.format("%.1f", currentBatteryPercentage * 100) .. '%')
+    
+    -- Show what values are being sent to NUI
+    print('[Drone Signal] === VALUES SENT TO UI ===')
+    local hudData = {
+        action = "updateHUD",
+        showBattery = Config.RuntimeLimiter.enabled,
+        showSignal = Config.DistanceLimiter.enabled,
+        signal = calculatedSignalQuality,
+        showNoise = calculatedNoiseIntensity > 0.01,
+        noiseLevel = calculatedNoiseIntensity
+    }
+    
+    if hudData.showBattery then
+        hudData.battery = math.floor(currentBatteryPercentage * 100)
+    end
+    
+    print('  showBattery: ' .. tostring(hudData.showBattery))
+    print('  showSignal: ' .. tostring(hudData.showSignal))
+    print('  signal: ' .. string.format("%.2f", hudData.signal))
+    print('  showNoise: ' .. tostring(hudData.showNoise))
+    print('  noiseLevel: ' .. string.format("%.3f", hudData.noiseLevel))
+    if hudData.battery then
+        print('  battery: ' .. hudData.battery)
+    end
+    print('[Drone Signal] === END STATUS ===')
+end)
+
+-- Debug commands for testing overlays
+RegisterCommand("testdronebodycam", function()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone Debug] Testing bodycam overlay...')
+        updatePlayerData() -- Trigger the bodycam overlay
+    end
+end, false)
+
+RegisterCommand("testdroneconnlost", function()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone Debug] Testing connection lost overlay...')
+        SendNUIMessage({ 
+            action = "showConnectionLost",
+            duration = Config.Overlays and Config.Overlays.connectionLostDuration or 5000
+        })
+    end
+end, false)
+
+RegisterCommand("testdronebattery", function()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone Debug] Testing battery empty overlay...')
+        SendNUIMessage({ 
+            action = "showBatteryEmpty",
+            duration = Config.Overlays and Config.Overlays.batteryEmptyDuration or 5000
+        })
+    end
+end, false)
+
+RegisterCommand("testdronenoise", function()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone Debug] Testing noise overlay at maximum intensity...')
+        SendNUIMessage({ 
+            action = "updateHUD", 
+            showNoise = true, 
+            noiseLevel = 1.0,
+            showBattery = false,
+            showSignal = false 
+        })
+    end
+end, false)
+
+RegisterCommand("testdronestartup", function()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone Debug] Testing startup screen...')
+        local logoUrl = Config.StartupScreen.logoUrl
+        if logoUrl and logoUrl ~= "" then
+            if not string.find(logoUrl, "^https?://") and not string.find(logoUrl, "^nui://") then
+                local resourceName = GetCurrentResourceName()
+                local sanitizedPath = logoUrl:gsub("^/", "")
+                logoUrl = ("https://cfx-nui-%s/nui/%s"):format(resourceName, sanitizedPath)
+            end
+        end
+        
+        SendNUIMessage({
+            action = "showStartupScreen",
+            logoUrl = logoUrl,
+            duration = Config.StartupScreen.duration or 3000,
+            droneStartPercent = Config.StartupScreen.droneStartPercent or 80
+        })
+        
+        if Config.StartupScreen.playSound and Config.StartupScreen.soundName then
+            PlaySoundFrontend(-1, Config.StartupScreen.soundName, Config.StartupScreen.soundSet or "special_soundset", true)
+        end
+    end
+end, false)
+
+RegisterCommand("testdronehide", function()
+    if Config.Debug and Config.Debug.enabled then
+        print('[Drone Debug] Hiding all overlays...')
+        hideOverlay()
+    end
+end, false)

@@ -1,7 +1,7 @@
 fx_version 'cerulean'
 game 'gta5'
 description 'Drone script'
-version '1.2.8'
+version '2.0.1'
 
 
 client_scripts {

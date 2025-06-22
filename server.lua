@@ -199,6 +199,22 @@ AddEventHandler("drone:initiateDestruction", function(destroyedNetId, effectCoor
     end
 end)
 
+RegisterNetEvent("drone:server:giveItemBack")
+AddEventHandler("drone:server:giveItemBack", function()
+    local src = source
+    if Config.Framework == "esx" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            xPlayer.addInventoryItem(Config.ItemName, 1)
+        end
+    elseif Config.Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            Player.Functions.AddItem(Config.ItemName, 1)
+        end
+    end
+end)
+
 AddEventHandler("playerDropped", function()
     local src = source
     if drones[src] then

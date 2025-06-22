@@ -85,8 +85,7 @@ Config = {
     DistanceLimiter = {
         enabled = true,                    
         maxDistance = 300.0,                -- Max distance in meters from the player before connection is lost.
-        effectStartPercentage = 0.5,       
-        NoiseEffect = {
+        effectStartPercentage = 0.5,         NoiseEffect = {
             enabled = true,                 
             noiseStartPercentage = 0.8,     
             maxNoiseIntensity = 0.75,       
@@ -95,6 +94,33 @@ Config = {
         NoiseSound = {
             enabled = true                  -- Enable/disable audio static/interference sound.
         }
+    },
+
+    ----------------------------------------------------------------
+    -- JAMMER INTEGRATION
+    ----------------------------------------------------------------
+    JammerIntegration = {
+        enabled = true,
+        excludeOwnerJammers = true, -- If true, jammers placed by the player won't affect their own drone
+
+        -- Signal Degradation Settings        
+        SignalEffect = {
+            enabled = true,                 -- Enable signal quality degradation near jammers
+            -- Note: Signal shows 1 bar at jammer edge, maximum loss at no-go zone edge
+            maxSignalLoss = 0.9,           -- Maximum signal loss (90% loss at no-go zone edge)
+            degradationExponent = 7.5      -- How quickly signal degrades from jammer edge to no-go zone
+        },
+          -- No-go zone effects (immediate disconnect)
+        NogoZone = {
+            enabled = true,                 -- Enable no-go zone blocking
+            forceDisconnect = true,         -- Force disconnect drone in no-go zones
+            notification = "Signal interference too strong! Drone connection lost.",
+            -- Note: No-go zone radius is defined per-jammer using the noGoZone property
+            -- Values < 1.0 are treated as percentage of jammer range (e.g., 0.2 = 20%)
+            -- Values >= 1.0 are treated as absolute radius in meters (e.g., 15.0 = 15m)
+        }
+        
+        -- Note: Noise effects use DistanceLimiter.NoiseEffect settings and start at 50% of jammer range
     },
 
     ----------------------------------------------------------------
@@ -154,6 +180,57 @@ Config = {
 
     DestructionSound = {
         name = "ent_amb_elec_crackle",
-        set = "",
+        set = "",    },
+
+    ----------------------------------------------------------------
+    -- DEBUG SETTINGS
+    ----------------------------------------------------------------
+    Debug = {
+        enabled = true,                     -- Enable debug messages
+    },
+
+    ----------------------------------------------------------------
+    -- STARTUP SCREEN
+    ----------------------------------------------------------------
+    StartupScreen = {
+        enabled = true,                     -- Enable/disable startup screen
+        duration = 3000,                    -- Duration in milliseconds (3 seconds)
+        logoUrl = "images/default.png",     -- Logo to show during startup
+        showLoadingBar = true,              -- Show animated loading bar
+        playSound = true,                   -- Play startup sound
+        droneStartPercent = 50,             -- Start drone at this % of loading bar completion
+        
+        -- Sound Options (choose one):
+        -- Option 1: Classic beep sounds
+        soundName = "5_SEC_WARNING",             -- Classic error/loading beep
+        soundSet = "HUD_MINI_GAME_SOUNDSET",
+        
+        -- Option 2: Digital/electronic sounds  
+        -- soundName = "DIGITAL_HORROR_01_MASTER", 
+        -- soundSet = "DLC_HEIST_HACKING_SNAKE_SOUNDS",
+        
+        -- Option 3: Scanning/radar sounds
+        -- soundName = "5_SEC_WARNING", 
+        -- soundSet = "HUD_MINI_GAME_SOUNDSET",
+        
+        -- Option 4: Mechanical/robotic sounds
+        -- soundName = "PICK_UP", 
+        -- soundSet = "HUD_FRONTEND_DEFAULT_SOUNDSET",
+        
+        -- Option 5: Success/completion sounds
+        -- soundName = "SUCCESS", 
+        -- soundSet = "HUD_AWARDS",
+        
+        -- Option 6: Futuristic/sci-fi sounds
+        -- soundName = "TOGGLE_ON", 
+        -- soundSet = "HUD_FRONTEND_DEFAULT_SOUNDSET",
+    },
+
+    ----------------------------------------------------------------
+    -- OVERLAY SETTINGS
+    ----------------------------------------------------------------
+    Overlays = {
+        connectionLostDuration = 1000,      -- Duration to show connection lost overlay (milliseconds)
+        batteryEmptyDuration = 1000,        -- Duration to show battery empty overlay (milliseconds)
     },
 }
